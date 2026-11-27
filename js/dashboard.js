@@ -146,15 +146,23 @@ export function normalizeConfig(cfg, ds, rows) {
 }
 
 // ---------------- cálculos ----------------
+// seleções: { campo: [valor, valor...] } — aceita o formato antigo { campo: 'valor' }
+function normFilters(f) {
+  const out = {};
+  for (const [k, v] of Object.entries(f || {})) {
+    const arr = (Array.isArray(v) ? v : [v]).filter(x => x !== '' && x != null).map(String);
+    if (arr.length) out[k] = [...new Set(arr)];
+  }
+  return out;
+}
+const fieldValue = (r, c, dateCol) =>
+  c === '__year' ? (r[dateCol] || '').slice(0, 4) : c === '__month' ? (r[dateCol] || '').slice(5, 7) : String(r[c] ?? '(vazio)');
+
 function applyFilters(rows, cfg, dateCol) {
-  const f = Object.entries(cfg.filters || {}).filter(([, v]) => v !== '' && v != null);
+  const f = Object.entries(normFilters(cfg.filters)).map(([c, v]) => [c, new Set(v)]);
   if (!f.length) return rows;
   return rows.filter(r => {
-    for (const [c, v] of f) {
-      if (c === '__year') { if ((r[dateCol] || '').slice(0, 4) !== v) return false; }
-      else if (c === '__month') { if ((r[dateCol] || '').slice(5, 7) !== v) return false; }
-      else if (String(r[c] ?? '(vazio)') !== v) return false;
-    }
+    for (const [c, set] of f) if (!set.has(fieldValue(r, c, dateCol))) return false;
     return true;
   });
 }
@@ -236,6 +244,28 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   const dateCols = cols.filter(c => c.type === 'date');
   const numCols = cols.filter(c => c.type === 'number');
   if (cfg.dateCol && !dateCols.find(c => c.name === cfg.dateCol)) cfg.dateCol = dateCols[0]?.name || null;
+  cfg.filters = normFilters(cfg.filters);
+  saved.filters = normFilters(saved.filters);
+
+  // ---------- seleções (estilo Qlik): histórico para voltar/avançar ----------
+  let history = [], future = [];
+  const fieldLabel = c => c === '__year' ? 'Ano' : c === '__month' ? 'Mês' : c;
+  const valueLabel = (c, v) => c === '__month' ? (MONTHS_FULL[+v - 1] || v) : v;
+  function allValues(c) {
+    if (c === '__year') return [...new Set(allRows.map(r => (r[cfg.dateCol] || '').slice(0, 4)).filter(Boolean))].sort();
+    if (c === '__month') return MONTHS_FULL.map((_, i) => String(i + 1).padStart(2, '0'));
+    return [...distinct(allRows, c, allRows.length)].map(v => String(v ?? '(vazio)')).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+  }
+  function setFilters(next) {
+    next = normFilters(next);
+    if (JSON.stringify(next) === JSON.stringify(cfg.filters)) return;
+    history.push(clone(cfg.filters));
+    if (history.length > 50) history.shift();
+    future = [];
+    cfg.filters = next;
+    if (editing) markDirty();
+    draw();
+  }
 
   const markDirty = () => { dirty = true; };
   const opt = (v, label, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(label)}</option>`;
@@ -260,33 +290,43 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         <button class="btn" data-act="edit">✎ Editar painel</button>
       </div>`;
 
-    // ----- filtros -----
-    const filterSelects = cfg.filterCols.map(c => {
-      if (c === '__year' || c === '__month') {
-        if (!cfg.dateCol) return '';
-        if (c === '__year') {
-          const years = [...new Set(allRows.map(r => (r[cfg.dateCol] || '').slice(0, 4)).filter(Boolean))].sort();
-          return `<label class="field"><span>Ano</span><select data-filter="__year">${opt('', 'Todos', !cfg.filters.__year)}${years.map(y => opt(y, y, cfg.filters.__year === y)).join('')}</select></label>`;
-        }
-        return `<label class="field"><span>Mês</span><select data-filter="__month">${opt('', 'Todos', !cfg.filters.__month)}${MONTHS_FULL.map((m, i) => { const v = String(i + 1).padStart(2, '0'); return opt(v, m, cfg.filters.__month === v); }).join('')}</select></label>`;
-      }
-      if (!cols.find(x => x.name === c)) return '';
-      const values = [...distinct(allRows, c, allRows.length)].map(v => String(v ?? '(vazio)')).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true })).slice(0, 500);
-      return `<label class="field"><span>${esc(c)}</span><select data-filter="${esc(c)}">${opt('', 'Todos', !cfg.filters[c])}${values.map(v => opt(v, v, cfg.filters[c] === v)).join('')}</select></label>`;
+    // ----- barra de seleções atuais -----
+    const selEntries = Object.entries(cfg.filters);
+    const selChips = selEntries.map(([c, vals]) => {
+      const total = allValues(c).length;
+      const text = vals.length <= 2 ? vals.map(v => valueLabel(c, v)).join(', ') : `${vals.length} de ${total}`;
+      return `<div class="sel-chip" data-field="${esc(c)}" title="${esc(vals.map(v => valueLabel(c, v)).join(', '))}">
+        <span class="sel-field">${esc(fieldLabel(c))}</span>
+        <span class="sel-vals">${esc(text)}</span>
+        <button class="sel-x" data-unsel="${esc(c)}" title="Limpar ${esc(fieldLabel(c))}">×</button>
+      </div>`;
     }).join('');
-    // filtros ativos que não estão na barra (ex.: clique no gráfico)
-    const chips = Object.entries(cfg.filters).filter(([k, v]) => v && !cfg.filterCols.includes(k))
-      .map(([k, v]) => `<span class="chip">${esc(k)}: <strong>${esc(v)}</strong><button data-unfilter="${esc(k)}" title="Remover">×</button></span>`).join('');
-    const hasActive = Object.values(cfg.filters).some(Boolean);
-    const filterBar = (filterSelects || chips || editing) ? `
+    const selBar = `
+      <div class="sel-bar">
+        <div class="sel-nav">
+          <button data-sel="back" title="Voltar à seleção anterior" ${history.length ? '' : 'disabled'}>↶</button>
+          <button data-sel="fwd" title="Avançar" ${future.length ? '' : 'disabled'}>↷</button>
+          <button data-sel="clear" title="Limpar todas as seleções" ${selEntries.length ? '' : 'disabled'}>⌫</button>
+        </div>
+        <div class="sel-items">${selChips || '<span class="sel-empty">Nenhuma seleção — clique nos gráficos ou use os filtros</span>'}</div>
+        <span class="rowcount">${nf.format(rows.length)} de ${nf.format(allRows.length)} linhas</span>
+      </div>`;
+
+    // ----- filtros (lista com seleção múltipla) -----
+    const filterBtns = cfg.filterCols.map(c => {
+      if ((c === '__year' || c === '__month') && !cfg.dateCol) return '';
+      if (!c.startsWith('__') && !cols.find(x => x.name === c)) return '';
+      const vals = cfg.filters[c] || [];
+      const summary = !vals.length ? 'Todos' : vals.length === 1 ? valueLabel(c, vals[0]) : `${vals.length} selecionados`;
+      return `<div class="field"><span>${esc(fieldLabel(c))}</span>
+        <button type="button" class="filter-dd ${vals.length ? 'active' : ''}" data-field="${esc(c)}"><span>${esc(summary)}</span><i>▾</i></button></div>`;
+    }).join('');
+    const filterBar = (filterBtns || editing) ? `
       <div class="filters card">
-        ${filterSelects || (editing ? '<span class="muted">Nenhum filtro escolhido. Clique em "Escolher filtros".</span>' : '')}
-        ${chips}
-        ${hasActive ? '<button class="btn link" data-act="clear">Limpar filtros</button>' : ''}
-        <span class="muted rowcount">${nf.format(rows.length)} de ${nf.format(allRows.length)} linhas</span>
+        ${filterBtns || '<span class="muted">Nenhum filtro escolhido. Clique em "Escolher filtros".</span>'}
       </div>` : '';
 
-    el.innerHTML = `${toolbar}${filterBar}
+    el.innerHTML = `${toolbar}${selBar}${filterBar}
       <div class="dash-canvas ${editing ? 'editing' : ''}">
         ${editing ? '<div class="grid-bg"></div><div class="drop-ghost" hidden></div>' : ''}
         ${cfg.widgets.map(w => widgetHtml(w)).join('')}
@@ -425,7 +465,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     const onClick = (evt, els) => {
       if (editing || g.isDate || !els.length) return;
       const key = g.keys[els[0].index];
-      if (key !== '__outros') toggleFilter(w.dim, String(key));
+      // adia para depois do Chart.js terminar de tratar o clique
+      if (key !== '__outros') setTimeout(() => toggleFilter(w.dim, String(key)), 0);
     };
     const tooltip = { callbacks: { label: c => ` ${pie ? c.label + ': ' : ''}${nf.format(c.raw)}` } };
     let chart;
@@ -463,9 +504,49 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   }
 
   function toggleFilter(col, value) {
-    cfg.filters = { ...cfg.filters, [col]: cfg.filters[col] === value ? '' : value };
-    if (editing) markDirty();
-    draw();
+    const cur = cfg.filters[col] || [];
+    const next = cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value];
+    setFilters({ ...cfg.filters, [col]: next });
+  }
+
+  // lista de valores de um campo (como a listbox do Qlik)
+  function openListbox(c, anchor) {
+    document.querySelector('.listbox')?.remove();
+    const box = document.createElement('div');
+    box.className = 'listbox card';
+    const r = anchor.getBoundingClientRect();
+    box.style.left = Math.min(r.left, window.innerWidth - 300) + 'px';
+    box.style.top = Math.min(r.bottom + 4, window.innerHeight - 380) + 'px';
+    box.innerHTML = `
+      <div class="lb-head"><strong>${esc(fieldLabel(c))}</strong><button class="lb-close" title="Fechar">×</button></div>
+      <input class="lb-search" placeholder="Pesquisar…">
+      <div class="lb-list"></div>
+      <div class="lb-foot"><button class="btn link" data-lb="all">Selecionar visíveis</button><button class="btn link" data-lb="none">Limpar</button></div>`;
+    document.body.append(box);
+    const values = allValues(c);
+    const search = box.querySelector('.lb-search');
+    const list = box.querySelector('.lb-list');
+    const visible = () => { const q = search.value.trim().toLowerCase(); return values.filter(v => !q || valueLabel(c, v).toLowerCase().includes(q)); };
+    const paint = () => {
+      const sel = new Set(cfg.filters[c] || []);
+      const vis = visible();
+      list.innerHTML = vis.slice(0, 1000).map(v => `
+        <label class="lb-item ${sel.has(v) ? 'selected' : ''}"><input type="checkbox" value="${esc(v)}" ${sel.has(v) ? 'checked' : ''}><span>${esc(valueLabel(c, v))}</span></label>`).join('')
+        + (vis.length > 1000 ? `<div class="muted small">Mostrando 1.000 de ${nf.format(vis.length)}. Use a pesquisa.</div>` : '')
+        + (!vis.length ? '<div class="muted small">Nada encontrado.</div>' : '');
+    };
+    paint();
+    list.addEventListener('change', e => { toggleFilter(c, e.target.value); paint(); });
+    search.addEventListener('input', paint);
+    box.querySelector('[data-lb="all"]').addEventListener('click', () => {
+      setFilters({ ...cfg.filters, [c]: [...new Set([...(cfg.filters[c] || []), ...visible()])] }); paint();
+    });
+    box.querySelector('[data-lb="none"]').addEventListener('click', () => { setFilters({ ...cfg.filters, [c]: [] }); paint(); });
+    const close = () => { box.remove(); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', onKey); };
+    const outside = e => { if (!box.contains(e.target) && !e.target.closest(`[data-field="${CSS.escape(c)}"]`)) close(); };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    box.querySelector('.lb-close').addEventListener('click', close);
+    setTimeout(() => { document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', onKey); search.focus(); }, 0);
   }
 
   // ---------------- eventos ----------------
@@ -484,15 +565,21 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       } catch { btn.disabled = false; }
     });
     act('export', () => exportCSV(ds, applyFilters(allRows, cfg, cfg.dateCol)));
-    act('clear', () => { cfg.filters = {}; draw(); });
+    el.querySelectorAll('[data-sel]').forEach(b => b.addEventListener('click', () => {
+      const a = b.dataset.sel;
+      if (a === 'clear') return setFilters({});
+      if (a === 'back' && history.length) { future.push(clone(cfg.filters)); cfg.filters = history.pop(); }
+      if (a === 'fwd' && future.length) { history.push(clone(cfg.filters)); cfg.filters = future.pop(); }
+      if (editing) markDirty();
+      draw();
+    }));
+    el.querySelectorAll('[data-unsel]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation(); setFilters({ ...cfg.filters, [b.dataset.unsel]: [] });
+    }));
+    el.querySelectorAll('.sel-chip').forEach(ch => ch.addEventListener('click', () => openListbox(ch.dataset.field, ch)));
+    el.querySelectorAll('.filter-dd').forEach(b => b.addEventListener('click', () => openListbox(b.dataset.field, b)));
     act('add', () => editWidget(null));
     act('filters', chooseFilters);
-    el.querySelectorAll('[data-filter]').forEach(s => s.addEventListener('change', () => {
-      cfg.filters = { ...cfg.filters, [s.dataset.filter]: s.value }; draw();
-    }));
-    el.querySelectorAll('[data-unfilter]').forEach(b => b.addEventListener('click', () => {
-      cfg.filters = { ...cfg.filters, [b.dataset.unfilter]: '' }; draw();
-    }));
     if (!editing) return;
 
     el.querySelectorAll('.widget[data-id]').forEach(sec => {
