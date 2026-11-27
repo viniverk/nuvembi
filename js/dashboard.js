@@ -22,7 +22,12 @@ export const TYPES = {
   table: { label: 'Tabela resumo', icon: '▤', h: 320 },
   datatable: { label: 'Tabela de dados', icon: '▦', h: 420 }
 };
-const GAP = 16;
+const GAP = 16;          // espaço entre os cartões (px)
+const COLS = 24;         // colunas da grade livre
+const ROW = 10;          // altura de uma linha da grade (px)
+const MOBILE = 700;      // abaixo disso os cartões ficam empilhados
+const defaultLabels = t => (t === 'pie' || t === 'doughnut') ? 'percent' : ['bar', 'hbar', 'line', 'area'].includes(t) ? 'value' : 'none';
+const labelsOf = w => w.labels || defaultLabels(w.type);
 const nf = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 });
 const nfc = new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -98,7 +103,7 @@ export function suggestConfig(ds, rows, pref = {}) {
     ...(dateCol ? ['__year'] : []),
     ...text.filter(c => c.name !== dim && !isCode(c)).filter(c => { const k = card(c); return k > 1 && k <= 200; }).slice(0, 4).map(c => c.name)
   ];
-  const w = (type, extra) => ({ id: uid(), type, title: '', dim, grain: 'month', measure, agg, top: 0, sort: 'desc', color: 0, labels: 'none', w: 6, h: TYPES[type].h, ...extra });
+  const w = (type, extra) => ({ id: uid(), type, title: '', dim, grain: 'month', measure, agg, top: 0, sort: 'desc', color: 0, w: 6, h: TYPES[type].h, ...extra });
   const widgets = [];
   if (measure !== '__count') {
     widgets.push(w('kpi', { w: 3 }));
@@ -108,16 +113,34 @@ export function suggestConfig(ds, rows, pref = {}) {
   widgets.push(w('kpi', { w: measure === '__count' ? 12 : 3, measure: '__count', agg: 'count', title: 'Quantidade de linhas' }));
   if (dim) {
     widgets.push(w('bar', { w: 8, top: 15 }));
-    widgets.push(w('doughnut', { w: 4, top: 5, color: 1, labels: 'percent' }));
+    widgets.push(w('doughnut', { w: 4, top: 5, color: 1 }));
   }
   if (dateCol) widgets.push(w('area', { w: 12, dim: dateCol, sort: 'label', color: 1 }));
   widgets.push(w('datatable', { w: 12, title: 'Dados' }));
-  return { version: 2, dateCol, filterCols, filters: {}, widgets };
+  return toV3({ version: 2, dateCol, filterCols, filters: {}, widgets });
 }
 
-// configurações antigas (v1) viram v2 mantendo as escolhas
+// v2 (sequência de cartões) -> v3 (posição livre x/y na grade)
+function toV3(cfg) {
+  const out = clone(cfg);
+  let x = 0, y = 0, rowH = 0;
+  for (const w of out.widgets) {
+    const gw = clamp(Math.round((w.w || 6) * 2), 4, COLS);
+    const gh = Math.max(8, Math.round(((w.h || 300) + GAP) / ROW));
+    if (x + gw > COLS) { x = 0; y += rowH; rowH = 0; }
+    Object.assign(w, { gx: x, gy: y, gw, gh });
+    if (w.labels === 'none') delete w.labels; // passa a usar o padrão do tipo
+    delete w.w; delete w.h;
+    x += gw; rowH = Math.max(rowH, gh);
+  }
+  out.version = 3;
+  return out;
+}
+
+// configurações antigas viram v3 mantendo as escolhas
 export function normalizeConfig(cfg, ds, rows) {
-  if (cfg && cfg.version === 2) return clone(cfg);
+  if (cfg && cfg.version === 3) return clone(cfg);
+  if (cfg && cfg.version === 2) return toV3(cfg);
   if (!cfg) return suggestConfig(ds, rows);
   return suggestConfig(ds, rows, { dim: cfg.dim, measure: cfg.measure, agg: cfg.agg, filterCols: cfg.filterCols });
 }
@@ -225,7 +248,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     // ----- barra superior -----
     const toolbar = editing ? `
       <div class="dash-toolbar card editing-bar">
-        <div class="hint">✎ <strong>Modo edição</strong> — arraste o título para mover, puxe o canto ◢ para redimensionar.</div>
+        <div class="hint">✎ <strong>Modo edição</strong> — arraste o gráfico pelo título para qualquer lugar e puxe o canto ◢ para mudar o tamanho.</div>
         <button class="btn ghost" data-act="filters">⚲ Escolher filtros</button>
         <button class="btn ghost" data-act="add">+ Adicionar gráfico</button>
         <button class="btn ghost" data-act="cancel">Cancelar</button>
@@ -264,12 +287,13 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       </div>` : '';
 
     el.innerHTML = `${toolbar}${filterBar}
-      <div class="dash-grid ${editing ? 'editing' : ''}">
+      <div class="dash-canvas ${editing ? 'editing' : ''}">
+        ${editing ? '<div class="grid-bg"></div><div class="drop-ghost" hidden></div>' : ''}
         ${cfg.widgets.map(w => widgetHtml(w)).join('')}
-        ${editing ? `<button class="widget add-tile" data-act="add" style="grid-column: span 4; height: 130px">+ Adicionar gráfico</button>` : ''}
       </div>
       ${!cfg.widgets.length && !editing ? '<div class="card empty"><p>Este painel está vazio. Clique em <strong>Editar painel</strong> para adicionar gráficos.</p></div>' : ''}`;
 
+    layout();
     cfg.widgets.forEach(w => fillWidget(w, rows));
     bindEvents();
   }
@@ -277,8 +301,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   function widgetHtml(w) {
     const title = w.title || autoTitle(w, ds);
     return `
-      <section class="widget w-${w.type}" data-id="${w.id}" style="grid-column: span ${clamp(w.w, 2, 12)}; height: ${clamp(w.h, 100, 1200)}px">
-        <header class="w-head" ${editing ? 'draggable="true"' : ''}>
+      <section class="widget w-${w.type}" data-id="${w.id}">
+        <header class="w-head">
           ${editing ? '<span class="grip" title="Arraste para mover">⠿</span>' : ''}
           <h3 title="${esc(title)}">${esc(title)}</h3>
           ${editing ? `<div class="w-tools">
@@ -290,6 +314,71 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         <div class="w-body"></div>
         ${editing ? '<div class="w-resize" title="Arraste para redimensionar">◢</div>' : ''}
       </section>`;
+  }
+
+  // ---------- grade livre ----------
+  const canvasEl = () => el.querySelector('.dash-canvas');
+  const metrics = () => {
+    const c = canvasEl();
+    const width = c.clientWidth;
+    return { width, colW: (width + GAP) / COLS, mobile: width < MOBILE };
+  };
+  const overlap = (a, b) => a.gx < b.gx + b.gw && b.gx < a.gx + a.gw && a.gy < b.gy + b.gh && b.gy < a.gy + a.gh;
+
+  // empurra para baixo quem ficou em cima do cartão movido
+  function resolve(moved) {
+    const queue = [moved];
+    let guard = 0;
+    while (queue.length && guard++ < 500) {
+      const a = queue.shift();
+      for (const b of cfg.widgets) {
+        if (b !== a && b !== moved && overlap(a, b)) { b.gy = a.gy + a.gh; queue.push(b); }
+        else if (b !== a && b === moved && a !== moved && overlap(a, b)) { a.gy = b.gy + b.gh; queue.push(a); }
+      }
+    }
+  }
+
+  // primeiro espaço vazio onde o cartão cabe
+  function findFree(gw, gh) {
+    for (let y = 0; y < 2000; y++) {
+      for (let x = 0; x + gw <= COLS; x++) {
+        const t = { gx: x, gy: y, gw, gh };
+        if (!cfg.widgets.some(o => overlap(t, o))) return { gx: x, gy: y };
+      }
+    }
+    return { gx: 0, gy: 0 };
+  }
+
+  function rect(w, m) {
+    return { left: w.gx * m.colW, top: w.gy * ROW, width: w.gw * m.colW - GAP, height: w.gh * ROW - GAP };
+  }
+
+  function layout() {
+    const c = canvasEl();
+    if (!c) return;
+    const m = metrics();
+    let bottom = 0;
+    if (m.mobile) {
+      // celular: empilha na ordem visual (de cima para baixo, da esquerda para a direita)
+      let top = 0;
+      [...cfg.widgets].sort((a, b) => a.gy - b.gy || a.gx - b.gx).forEach(w => {
+        const sec = c.querySelector(`.widget[data-id="${w.id}"]`);
+        const h = Math.max(110, w.gh * ROW - GAP);
+        Object.assign(sec.style, { left: '0px', top: top + 'px', width: '100%', height: h + 'px' });
+        top += h + GAP;
+      });
+      bottom = top;
+    } else {
+      cfg.widgets.forEach(w => {
+        const sec = c.querySelector(`.widget[data-id="${w.id}"]`);
+        const r = rect(w, m);
+        Object.assign(sec.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+        bottom = Math.max(bottom, (w.gy + w.gh) * ROW);
+      });
+    }
+    c.style.height = (bottom + (editing && !m.mobile ? 320 : 0)) + 'px';
+    const bg = c.querySelector('.grid-bg');
+    if (bg) bg.style.backgroundSize = `${m.colW}px ${ROW * 4}px`;
   }
 
   function fillWidget(w, rows) {
@@ -345,11 +434,11 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       chart = new Chart(canvas, {
         type: w.type,
         data: { labels: g.labels, datasets: [{ data: g.values, backgroundColor: colors, borderColor: '#fff', borderWidth: 2 }] },
-        options: { maintainAspectRatio: false, onClick, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip, valueLabels: { mode: w.labels, kind: 'pie' } } },
+        options: { maintainAspectRatio: false, onClick, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip, valueLabels: { mode: labelsOf(w), kind: 'pie' } } },
         plugins: [valueLabelsPlugin]
       });
     } else {
-      const showLabels = w.labels && w.labels !== 'none';
+      const showLabels = labelsOf(w) !== 'none';
       chart = new Chart(canvas, {
         type: line ? 'line' : 'bar',
         plugins: [valueLabelsPlugin],
@@ -364,8 +453,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         options: {
           maintainAspectRatio: false, onClick,
           indexAxis: w.type === 'hbar' ? 'y' : 'x',
-          plugins: { legend: { display: false }, tooltip, valueLabels: { mode: w.labels, kind: w.type === 'hbar' ? 'hbar' : line ? 'line' : 'bar' } },
-          layout: { padding: !showLabels ? 0 : w.type === 'hbar' ? { right: w.labels === 'both' ? 90 : 50 } : line ? { top: 22, left: 12, right: 30 } : { top: 20 } },
+          plugins: { legend: { display: false }, tooltip, valueLabels: { mode: labelsOf(w), kind: w.type === 'hbar' ? 'hbar' : line ? 'line' : 'bar' } },
+          layout: { padding: !showLabels ? 0 : w.type === 'hbar' ? { right: labelsOf(w) === 'both' ? 90 : 50 } : line ? { top: 22, left: 12, right: 30 } : { top: 20 } },
           scales: { x: { grid: { display: w.type === 'hbar' }, ticks: { callback: tick } }, y: { grid: { color: '#eef2f7', display: w.type !== 'hbar' }, ticks: { callback: tick } } }
         }
       });
@@ -411,7 +500,9 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       sec.querySelector('[data-w="edit"]').addEventListener('click', () => editWidget(w));
       sec.querySelector('[data-w="dup"]').addEventListener('click', () => {
         const i = cfg.widgets.indexOf(w);
-        cfg.widgets.splice(i + 1, 0, { ...clone(w), id: uid(), title: w.title ? w.title + ' (cópia)' : '' });
+        const copy = { ...clone(w), id: uid(), title: w.title ? w.title + ' (cópia)' : '' };
+        Object.assign(copy, findFree(w.gw, w.gh));
+        cfg.widgets.splice(i + 1, 0, copy);
         markDirty(); draw();
       });
       sec.querySelector('[data-w="del"]').addEventListener('click', () => {
@@ -424,69 +515,69 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     });
   }
 
-  // puxar o canto para mudar largura (colunas) e altura (px)
-  function bindResize(sec, w) {
-    const handle = sec.querySelector('.w-resize');
-    handle.addEventListener('pointerdown', e => {
-      e.preventDefault(); e.stopPropagation();
-      const grid = sec.parentElement;
-      const colW = (grid.clientWidth - 11 * GAP) / 12;
-      const start = { x: e.clientX, y: e.clientY, w: sec.offsetWidth, h: sec.offsetHeight };
-      handle.setPointerCapture(e.pointerId);
-      sec.classList.add('resizing');
-      const move = ev => {
-        const span = clamp(Math.round((start.w + ev.clientX - start.x + GAP) / (colW + GAP)), 2, 12);
-        const h = clamp(Math.round((start.h + ev.clientY - start.y) / 10) * 10, 100, 1200);
-        sec.style.gridColumn = `span ${span}`;
-        sec.style.height = h + 'px';
-        sec.dataset.size = `${span}/12 · ${h}px`;
-      };
-      const up = () => {
-        handle.removeEventListener('pointermove', move);
-        sec.classList.remove('resizing');
-        const span = parseInt(sec.style.gridColumn.replace('span', ''), 10) || w.w;
-        const h = parseInt(sec.style.height, 10) || w.h;
-        if (span !== w.w || h !== w.h) { w.w = span; w.h = h; markDirty(); }
-        charts.get(w.id)?.resize();
-      };
-      handle.addEventListener('pointermove', move);
-      handle.addEventListener('pointerup', up, { once: true });
-      handle.addEventListener('pointercancel', up, { once: true });
-    });
+  // arrastar com o mouse: posição livre (move) ou tamanho (resize)
+  function startPointer(e, sec, w, mode) {
+    if (e.button !== 0) return;
+    const m = metrics();
+    if (m.mobile) return;
+    e.preventDefault();
+    const c = canvasEl();
+    const ghost = c.querySelector('.drop-ghost');
+    const start = { x: e.clientX, y: e.clientY, ...rect(w, m) };
+    const orig = { gx: w.gx, gy: w.gy, gw: w.gw, gh: w.gh };
+    let target = { ...orig };
+    sec.classList.add(mode === 'move' ? 'moving' : 'resizing');
+    ghost.hidden = false;
+    const showGhost = () => {
+      const r = rect(target, m);
+      Object.assign(ghost.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+      sec.dataset.size = `${target.gw}/${COLS} col · ${target.gh * ROW - GAP}px`;
+      // aumenta a área quando o cartão chega perto do fim
+      const need = (target.gy + target.gh) * ROW + 320;
+      if (parseFloat(c.style.height) < need) c.style.height = need + 'px';
+    };
+    showGhost();
+    const move = ev => {
+      const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+      if (mode === 'move') {
+        sec.style.left = start.left + dx + 'px';
+        sec.style.top = Math.max(0, start.top + dy) + 'px';
+        target.gx = clamp(Math.round((start.left + dx) / m.colW), 0, COLS - orig.gw);
+        target.gy = Math.max(0, Math.round((start.top + dy) / ROW));
+      } else {
+        const wpx = Math.max(m.colW * 3 - GAP, start.width + dx);
+        const hpx = Math.max(90, start.height + dy);
+        sec.style.width = wpx + 'px';
+        sec.style.height = hpx + 'px';
+        target.gw = clamp(Math.round((wpx + GAP) / m.colW), 3, COLS - orig.gx);
+        target.gh = clamp(Math.round((hpx + GAP) / ROW), 8, 150);
+      }
+      showGhost();
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      sec.classList.remove('moving', 'resizing');
+      ghost.hidden = true;
+      if (target.gx !== orig.gx || target.gy !== orig.gy || target.gw !== orig.gw || target.gh !== orig.gh) {
+        Object.assign(w, target);
+        resolve(w);
+        markDirty();
+      }
+      layout();
+      charts.get(w.id)?.resize();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   }
 
-  // arrastar pelo título para reordenar
+  function bindResize(sec, w) {
+    sec.querySelector('.w-resize').addEventListener('pointerdown', e => { e.stopPropagation(); startPointer(e, sec, w, 'resize'); });
+  }
   function bindDrag(sec, w) {
-    const head = sec.querySelector('.w-head');
-    head.addEventListener('dragstart', e => {
-      e.dataTransfer.setData('text/plain', w.id);
-      e.dataTransfer.effectAllowed = 'move';
-      sec.classList.add('dragging');
-    });
-    head.addEventListener('dragend', () => {
-      sec.classList.remove('dragging');
-      el.querySelectorAll('.drop-before,.drop-after').forEach(x => x.classList.remove('drop-before', 'drop-after'));
-    });
-    sec.addEventListener('dragover', e => {
-      e.preventDefault();
-      const r = sec.getBoundingClientRect();
-      const after = e.clientX > r.left + r.width / 2;
-      sec.classList.toggle('drop-after', after);
-      sec.classList.toggle('drop-before', !after);
-    });
-    sec.addEventListener('dragleave', () => sec.classList.remove('drop-before', 'drop-after'));
-    sec.addEventListener('drop', e => {
-      e.preventDefault();
-      const fromId = e.dataTransfer.getData('text/plain');
-      const after = sec.classList.contains('drop-after');
-      sec.classList.remove('drop-before', 'drop-after');
-      if (!fromId || fromId === w.id) return;
-      const from = cfg.widgets.findIndex(x => x.id === fromId);
-      const [moved] = cfg.widgets.splice(from, 1);
-      let to = cfg.widgets.findIndex(x => x.id === w.id);
-      if (after) to++;
-      cfg.widgets.splice(to, 0, moved);
-      markDirty(); draw();
+    sec.querySelector('.w-head').addEventListener('pointerdown', e => {
+      if (e.target.closest('.w-tools')) return;
+      startPointer(e, sec, w, 'move');
     });
   }
 
@@ -499,7 +590,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       id: uid(), type: 'bar', title: '',
       dim: textCols[0]?.name || dateCols[0]?.name || null, grain: 'month',
       measure: mainMeasure, agg: mainMeasure === '__count' ? 'count' : 'sum',
-      top: 10, sort: 'desc', color: 0, labels: 'none', w: 6, h: TYPES.bar.h
+      top: 10, sort: 'desc', color: 0
     };
     const dimOpts = cols.filter(c => c.type !== 'number')
       .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : ''), c.name === base.dim)).join('');
@@ -522,7 +613,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
           ${opt('desc', 'Maior valor primeiro', base.sort === 'desc')}${opt('asc', 'Menor valor primeiro', base.sort === 'asc')}${opt('label', 'Nome / data (A→Z)', base.sort === 'label')}</select></label>
       </div>
       <label class="field" data-show="labels"><span>Rótulos de dados</span><select name="labels">
-        ${Object.entries(LABELS).map(([k, v]) => opt(k, v, k === (base.labels || 'none'))).join('')}</select></label>
+        ${Object.entries(LABELS).map(([k, v]) => opt(k, v, k === labelsOf(base))).join('')}</select></label>
       <div class="field" data-show="color"><span>Cor</span><div class="swatches">${PALETTE.map((c, i) => `
         <label><input type="radio" name="color" value="${i}" ${i === (base.color || 0) ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>`;
 
@@ -533,9 +624,12 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         measure: form.measure.value, agg: form.measure.value === '__count' ? 'count' : form.agg.value,
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value
       };
-      if (isNew) { w.h = TYPES[t].h; w.w = t === 'kpi' ? 3 : t === 'datatable' ? 12 : 6; cfg.widgets.push(w); }
-      else {
-        if (TYPES[existing.type].h !== TYPES[t].h && existing.h === TYPES[existing.type].h) w.h = TYPES[t].h;
+      if (isNew) {
+        w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
+        w.gh = Math.round((TYPES[t].h + GAP) / ROW);
+        Object.assign(w, findFree(w.gw, w.gh));
+        cfg.widgets.push(w);
+      } else {
         cfg.widgets[cfg.widgets.findIndex(x => x.id === existing.id)] = w;
       }
       markDirty(); draw();
@@ -562,6 +656,10 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       };
       form.wtitle.placeholder = autoTitle(preview, ds);
     };
+    form.labels.addEventListener('change', () => (form.labels.dataset.touched = '1'));
+    form.querySelectorAll('input[name=type]').forEach(r => r.addEventListener('change', () => {
+      if (!form.labels.dataset.touched) form.labels.value = defaultLabels(form.type.value);
+    }));
     form.querySelectorAll('input[name=type], select').forEach(x => x.addEventListener('change', () => {
       // ao escolher uma data em "Analisar por", ordena cronologicamente
       if (x.name === 'dim' && cols.find(c => c.name === x.value)?.type === 'date') { form.sort.value = 'label'; form.top.value = '0'; }
@@ -600,7 +698,12 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   }
 
   draw();
-  return { destroy: () => charts.forEach(c => c.destroy()) };
+  const ro = new ResizeObserver(() => {
+    if (!document.body.contains(el)) { ro.disconnect(); return; }
+    layout();
+  });
+  ro.observe(el);
+  return { destroy: () => { ro.disconnect(); charts.forEach(c => c.destroy()); } };
 }
 
 // ---------------- utilitários ----------------

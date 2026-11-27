@@ -1,10 +1,10 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js';
-import { createStore } from './store.js';
-import { readFile, normalizeRows } from './parser.js';
-import { mountDashboard, suggestConfig } from './dashboard.js';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=5';
+import { createStore } from './store.js?v=5';
+import { readFile, normalizeRows } from './parser.js?v=5';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=5';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

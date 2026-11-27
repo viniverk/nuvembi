@@ -15,7 +15,7 @@ SaaS de BI para pequenas e médias empresas: o cliente cria uma conta, importa p
 - **Editor de painel** (botão "Editar painel"):
   - adicionar gráficos: Indicador, Colunas, Barras, Linha, Área, Pizza, Rosca, Tabela resumo, Tabela de dados
   - renomear, trocar dimensão/medida/cálculo, Top N, ordenação, cor e rótulos de dados (valor, % ou ambos) de cada gráfico
-  - arrastar pelo título para mudar a ordem e puxar o canto ◢ para mudar largura e altura
+  - **tela livre**: arrastar o gráfico pelo título para qualquer posição (inclusive espaços vazios) e puxar o canto ◢ para mudar largura e altura; se cair em cima de outro, o outro desce
   - escolher quais filtros aparecem (colunas de texto, Ano e Mês)
   - duplicar e excluir gráficos
 - Clique numa barra, fatia ou linha da tabela resumo para filtrar o painel
@@ -78,3 +78,7 @@ Entre com qualquer e-mail e uma senha de 6+ caracteres, vá em **Importar dados*
 **Por que um agente local?** Protheus e SAP normalmente ficam no servidor da empresa, fechados para a
 internet. Em vez de abrir o banco para fora (arriscado), um pequeno programa roda dentro da rede do cliente
 e *envia* os dados para a nuvem — o mesmo modelo do Qlik Data Gateway e do Power BI Gateway.
+
+## Atualizações e cache do navegador
+Os arquivos são carregados com um número de versão (`?v=5` no `index.html` e nos `import` do `js/app.js`).
+Ao publicar uma mudança, aumente esse número nos dois lugares para que todos recebam a versão nova na hora.
