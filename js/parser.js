@@ -10,10 +10,20 @@
 const DATE_HINT = /(^|_)(data|dt|emis|emissao|venc|vencto|vencimento|dtdigit|entrega)|data|^dt/i;
 const CODE_HINT = /(^|_)(cod|codigo|id|cnpj|cpf|cep|filial|fil|nota|doc|nf|serie|pedido|num|loja|tel|fone)(_|$)/i;
 
+import { parseQVD } from './qvd.js?v=13';
+
 // ---------- leitura do arquivo ----------
-export async function readFile(file) {
+export async function readFile(file, { maxRows = Infinity } = {}) {
   const name = file.name.toLowerCase();
+  if (file.size > 600 * 1024 * 1024) throw new Error('Arquivo maior que 600 MB — grande demais para abrir no navegador.');
   const buf = await file.arrayBuffer();
+
+  // QVD do Qlik: já vem com tipos (números, datas e textos)
+  if (name.endsWith('.qvd')) {
+    const q = parseQVD(buf, { maxRows });
+    const t = buildTable([q.header, ...q.rows]);
+    return [{ name: q.name, ...t, total: q.total }];
+  }
 
   if (name.endsWith('.csv') || name.endsWith('.txt')) {
     const text = decodeText(buf);

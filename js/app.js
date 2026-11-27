@@ -1,11 +1,11 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=12';
-import { createStore, ROLES } from './store.js?v=12';
-import { readFile, normalizeRows } from './parser.js?v=12';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=12';
-import { buildModel } from './model.js?v=12';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=13';
+import { createStore, ROLES } from './store.js?v=13';
+import { readFile, normalizeRows } from './parser.js?v=13';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=13';
+import { buildModel } from './model.js?v=13';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -249,7 +249,7 @@ async function showHome() {
   }
   view.innerHTML = `${invitesBanner}<div class="grid">${list.map(d => `
     <article class="ds card">
-      <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : 'XLS'}</span>
+      <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : d.source === 'qvd' ? 'QVD' : 'XLS'}</span>
         <div><h3>${esc(d.name)}</h3><small>${new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</small></div>
         ${d.shareId ? '<span class="badge ok shared-badge" title="Tem link público ativo">🔗 Link ativo</span>' : ''}</div>
       <p class="muted">${nf.format(d.rowCount)} linhas · ${d.columns.length} colunas${d.tables?.length ? ` · ${d.tables.length + 1} tabelas` : ''}${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
@@ -284,8 +284,8 @@ function openRefresh(ds) {
           <label class="check"><input type="radio" name="rmode" value="replace" checked><span><strong>Substituir</strong> todos os dados pelos da planilha</span></label>
           <label class="check"><input type="radio" name="rmode" value="append"><span><strong>Acrescentar</strong> as linhas da planilha ao final (ex.: fechamento do mês)</span></label>
         </div>
-        <label class="drop small-drop"><input type="file" id="rfile" accept=".xlsx,.xls,.xlsm,.csv,.txt" hidden>
-          <strong>Escolher planilha</strong><span class="muted">Excel ou CSV</span></label>
+        <label class="drop small-drop"><input type="file" id="rfile" accept=".xlsx,.xls,.xlsm,.csv,.txt,.qvd" hidden>
+          <strong>Escolher planilha</strong><span class="muted">Excel, CSV ou QVD</span></label>
         <div id="rsummary"></div>
       </div>
       <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="rgo" disabled>Atualizar painel</button></footer>
@@ -314,7 +314,7 @@ function openRefresh(ds) {
     summary.innerHTML = `
       ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="rsheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
       <div class="refresh-summary">
-        <div><strong>${nf.format(sheet.data.length)}</strong> linhas na planilha → o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas
+        <div><strong>${nf.format(sheet.total || sheet.data.length)}</strong> linhas no arquivo → o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas
           ${append ? `<span class="muted">(${nf.format(ds.rowCount)} atuais + ${nf.format(sheet.data.length)} novas)</span>` : ''}</div>
         <div class="ok-text">✓ ${same.length} coluna(s) iguais às do painel</div>
         ${extra.length ? `<div>+ ${extra.length} coluna(s) nova(s): ${extra.map(c => esc(c.name)).join(', ')}</div>` : ''}
@@ -331,7 +331,7 @@ function openRefresh(ds) {
     const file = e.target.files[0];
     if (!file) return;
     summary.innerHTML = `<div class="muted">Lendo ${esc(file.name)}…</div>`;
-    try { sheets = await readFile(file); }
+    try { sheets = await readFile(file, { maxRows: MAX_ROWS + 1 }); }
     catch (err) { console.error(err); summary.innerHTML = `<div class="error">Não consegui ler este arquivo.</div>`; return; }
     if (!sheets.length) { summary.innerHTML = '<div class="error">O arquivo está vazio.</div>'; return; }
     // escolhe a aba que mais combina com as colunas do painel
@@ -457,7 +457,7 @@ function openAddTable(ds, data, existing = null) {
       <header><h2>${existing ? `Atualizar tabela "${esc(existing.name)}"` : 'Adicionar tabela ao painel'}</h2><button class="x" data-close>×</button></header>
       <div class="modal-body">
         <p class="muted">${existing ? 'Envie a planilha nova desta tabela. Os nomes dos campos são mantidos quando batem.' : 'Ex.: Metas por vendedor, cadastro de Vendedores ou de Produtos.'} Campos com o <strong>mesmo nome</strong> de um campo de outra tabela viram ligação 🔗 — renomeie aqui para ligar ou desligar.</p>
-        <label class="drop small-drop"><input type="file" id="tfile" accept=".xlsx,.xls,.xlsm,.csv,.txt" hidden><strong>Escolher planilha</strong><span class="muted">Excel ou CSV</span></label>
+        <label class="drop small-drop"><input type="file" id="tfile" accept=".xlsx,.xls,.xlsm,.csv,.txt,.qvd" hidden><strong>Escolher planilha</strong><span class="muted">Excel, CSV ou QVD</span></label>
         <div id="tbody"></div>
       </div>
       <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="tgo" disabled>${existing ? 'Atualizar tabela' : 'Adicionar tabela'}</button></footer>
@@ -500,7 +500,7 @@ function openAddTable(ds, data, existing = null) {
         <label class="field grow"><span>Nome da tabela</span><input id="tname" value="${esc(curName)}" maxlength="40"></label>
         ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="tsheet">${sheets.map((s2, i) => `<option value="${i}" ${s2 === sheet ? 'selected' : ''}>${esc(s2.name)}</option>`).join('')}</select></label>` : ''}
       </div>
-      <p class="muted small">${nf.format(sheet.data.length)} linhas · ${cols.length} campos</p>
+      <p class="muted small">${nf.format(sheet.total || sheet.data.length)} linhas · ${cols.length} campos${sheet.total > MAX_ROWS ? ` <span class="warn-text">(só as primeiras ${nf.format(MAX_ROWS)} serão usadas)</span>` : ''}</p>
       <div class="table-wrap"><table class="map-table">
         <thead><tr><th>Coluna na planilha</th><th>Nome do campo</th><th>Tipo</th><th>Ligação</th></tr></thead>
         <tbody>${cols.map((c, i) => {
@@ -528,7 +528,7 @@ function openAddTable(ds, data, existing = null) {
     const file = e.target.files[0];
     if (!file) return;
     body.innerHTML = `<div class="muted">Lendo ${esc(file.name)}…</div>`;
-    try { sheets = await readFile(file); } catch (err) { console.error(err); body.innerHTML = '<div class="error">Não consegui ler este arquivo.</div>'; return; }
+    try { sheets = await readFile(file, { maxRows: MAX_ROWS + 1 }); } catch (err) { console.error(err); body.innerHTML = '<div class="error">Não consegui ler este arquivo.</div>'; return; }
     if (!sheets.length) { body.innerHTML = '<div class="error">O arquivo está vazio.</div>'; return; }
     back.querySelector('.small-drop strong').textContent = file.name;
     setSheet(sheets[0]);
@@ -561,12 +561,12 @@ function showUpload() {
   const view = shell('upload', 'Importar dados', `
     <div class="card">
       <label class="drop" id="drop">
-        <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv,.txt" hidden>
+        <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv,.txt,.qvd" hidden>
         <div class="drop-icon">⇪</div>
         <strong>Arraste sua planilha aqui ou clique para escolher</strong>
-        <span class="muted">Excel (.xlsx, .xls) ou CSV · até ${nf.format(MAX_ROWS)} linhas · a primeira linha deve ter os títulos</span>
+        <span class="muted">Excel (.xlsx, .xls), CSV ou QVD do Qlik · até ${nf.format(MAX_ROWS)} linhas · a primeira linha deve ter os títulos</span>
       </label>
-      <p class="muted tip">Dica: exporte uma consulta do Protheus ou SAP para Excel e importe aqui. Datas no formato aaaammdd (ex.: D2_EMISSAO) são reconhecidas automaticamente.</p>
+      <p class="muted tip">Dica: já usa Qlik? Envie direto os <strong>.qvd</strong> que suas cargas geram. Também dá para exportar uma consulta do Protheus ou SAP para Excel. Datas no formato aaaammdd (ex.: D2_EMISSAO) são reconhecidas automaticamente.</p>
     </div>
     <div id="preview"></div>`);
 
@@ -582,13 +582,13 @@ async function handleFile(file) {
   const preview = document.getElementById('preview');
   preview.innerHTML = `<div class="card loading">Lendo ${esc(file.name)}…</div>`;
   let sheets;
-  try { sheets = await readFile(file); }
+  try { sheets = await readFile(file, { maxRows: MAX_ROWS + 1 }); }
   catch (e) { console.error(e); preview.innerHTML = `<div class="card error">Não consegui ler este arquivo. ${esc(e.message || '')}</div>`; return; }
   if (!sheets.length) { preview.innerHTML = `<div class="card error">O arquivo está vazio.</div>`; return; }
 
   let sheet = sheets[0];
   const baseName = file.name.replace(/\.[^.]+$/, '');
-  const source = /\.(csv|txt)$/i.test(file.name) ? 'csv' : 'excel';
+  const source = /\.(csv|txt)$/i.test(file.name) ? 'csv' : /\.qvd$/i.test(file.name) ? 'qvd' : 'excel';
 
   const draw = () => {
     const tooMany = sheet.data.length > MAX_ROWS;
@@ -598,8 +598,8 @@ async function handleFile(file) {
           <label class="field grow"><span>Nome do painel</span><input id="ds-name" value="${esc(sheets.length > 1 ? `${baseName} - ${sheet.name}` : baseName)}"></label>
           ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="sheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         </div>
-        <p class="muted">${nf.format(sheet.data.length)} linhas · ${sheet.columns.length} colunas. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
-        ${tooMany ? `<p class="error">Este MVP aceita até ${nf.format(MAX_ROWS)} linhas. Só as primeiras serão importadas.</p>` : ''}
+        <p class="muted">${nf.format(sheet.total || sheet.data.length)} linhas · ${sheet.columns.length} colunas${sheet.total ? ' · arquivo QVD do Qlik' : ''}. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
+        ${tooMany ? `<p class="error">Este MVP aceita até ${nf.format(MAX_ROWS)} linhas${sheet.total ? ` (o QVD tem ${nf.format(sheet.total)})` : ''}. Só as primeiras serão importadas.</p>` : ''}
         <div class="table-wrap"><table>
           <thead>
             <tr>${sheet.columns.map(c => `<th>${esc(c.name)}</th>`).join('')}</tr>
@@ -858,6 +858,7 @@ function showConnectors() {
   shell('connectors', 'Conectores', `
     <div class="grid">
       ${card('XLS', 'Excel / CSV', 'Ativo', 'ok', 'Importe planilhas .xlsx, .xls e .csv (separador ; ou ,). Números e datas no padrão brasileiro são reconhecidos.')}
+      ${card('QVD', 'Arquivos QVD (Qlik)', 'Ativo', 'ok', 'Envie os .qvd gerados pelas suas cargas do Qlik Sense/QlikView. Números, datas e códigos com zero à esquerda vêm com o tipo certo, sem precisar exportar para Excel.')}
       ${card('TOTVS', 'Protheus (SQL Server)', 'Fase 2', 'warn', 'Um agente instalado no servidor da empresa lê as tabelas (SD2, SF2, SB1, SB2…) e envia os dados para a nuvem em horários agendados.')}
       ${card('SAP', 'SAP ECC / S/4HANA', 'Fase 3', 'muted', 'Integração via OData ou extração por agente local, com o mesmo modelo de envio agendado.')}
       ${card('G', 'Google Planilhas', 'Fase 2', 'warn', 'Conexão direta com uma planilha do Google, atualizando o painel automaticamente.')}

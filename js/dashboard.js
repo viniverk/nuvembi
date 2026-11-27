@@ -6,8 +6,8 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=12';
-import { buildModel } from './model.js?v=12';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=13';
+import { buildModel } from './model.js?v=13';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
