@@ -1,10 +1,10 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=9';
-import { createStore, ROLES } from './store.js?v=9';
-import { readFile, normalizeRows } from './parser.js?v=9';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=9';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=10';
+import { createStore, ROLES } from './store.js?v=10';
+import { readFile, normalizeRows } from './parser.js?v=10';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=10';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -69,7 +69,7 @@ async function bootWorkspace(preferId) {
 function showInvitesOnly() {
   $app.innerHTML = `
     <div class="center-page"><div class="card invite-page">
-      <div class="brand"><span class="logo">◆</span> ${APP_NAME}</div>
+      <div class="brand"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
       <h2>Você foi convidado</h2>
       ${inviteListHtml(workspace.invites)}
       <p class="muted">Ou comece do zero com a sua própria empresa.</p>
@@ -146,7 +146,7 @@ function showLogin() {
   $app.innerHTML = `
   <div class="login">
     <section class="login-hero">
-      <div class="brand big"><span class="logo">◆</span> ${APP_NAME}</div>
+      <div class="brand big"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
       <h1>Seus dados do ERP e do Excel em painéis prontos, na nuvem.</h1>
       <ul class="bullets">
         <li>Importe planilhas Excel e CSV em segundos</li>
@@ -155,6 +155,7 @@ function showLogin() {
       </ul>
     </section>
     <section class="login-box card">
+      <img class="login-logo" src="img/logo-nuvembi.png" alt="${APP_NAME}">
       <h2>Acesse sua conta</h2>
       ${store.mode === 'local' ? `<p class="demo-note">Modo demonstração: os dados ficam só neste navegador. Use qualquer e-mail e uma senha de 6+ caracteres.</p>` : ''}
       <form id="login-form">
@@ -191,7 +192,7 @@ function shell(active, title, content, actions = '') {
   $app.innerHTML = `
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><span class="logo">◆</span> ${APP_NAME}</div>
+      <div class="brand"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
       <div class="org-box">
         <small>Empresa</small>
         ${workspace.orgs.length > 1
@@ -527,7 +528,7 @@ async function showPublic(t) {
   try { data = await store.loadShared(t); } catch (e) { console.error(e); }
   if (!data) {
     $app.innerHTML = `<div class="center-page"><div class="card invite-page">
-      <div class="brand"><span class="logo">◆</span> ${APP_NAME}</div>
+      <div class="brand"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
       <h2>Link indisponível</h2><p class="muted">Este painel não existe mais ou o link foi desativado por quem compartilhou.</p>
       <a class="btn" href="${location.pathname}">Conhecer o ${APP_NAME}</a></div></div>`;
     return;
@@ -535,7 +536,7 @@ async function showPublic(t) {
   $app.innerHTML = `
     <div class="public-page">
       <header class="public-top">
-        <div class="brand dark"><span class="logo">◆</span> ${APP_NAME}</div>
+        <div class="brand dark"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
         <h1>${esc(data.ds.name)}</h1>
         <span class="badge">Somente visualização</span>
         <a class="btn small" href="${location.pathname}" target="_blank" rel="noopener">Criar meu painel grátis</a>
