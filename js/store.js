@@ -104,9 +104,14 @@ async function createFirebaseStore(config) {
       const u = await F.getDoc(d('users', me.uid));
       const index = u.exists() ? (u.data().orgs || {}) : {};
       const orgs = [];
-      for (const [id, name] of Object.entries(index)) {
+      for (const [id, cachedName] of Object.entries(index)) {
         const m = await F.getDoc(d('orgs', id, 'members', me.uid)).catch(() => null);
-        if (m && m.exists()) orgs.push({ id, name, role: m.data().role });
+        if (!m || !m.exists()) continue;
+        // o nome oficial fica no documento da empresa (o admin pode ter renomeado)
+        const o = await F.getDoc(d('orgs', id)).catch(() => null);
+        const name = (o && o.exists() && o.data().name) || cachedName;
+        if (name !== cachedName) F.setDoc(d('users', me.uid), { orgs: { [id]: name } }, { merge: true }).catch(() => {});
+        orgs.push({ id, name, role: m.data().role });
       }
       const inv = await F.getDocs(F.query(c('invites'), F.where('email', '==', me.email)));
       const invites = inv.docs.map(x => ({ id: x.id, ...x.data() }));
@@ -124,6 +129,9 @@ async function createFirebaseStore(config) {
     async renameOrg(name) {
       await F.updateDoc(d('orgs', org.id), { name });
       await F.setDoc(d('users', me.uid), { orgs: { [org.id]: name } }, { merge: true });
+      // convites pendentes passam a mostrar o nome novo
+      const inv = await F.getDocs(F.query(c('invites'), F.where('orgId', '==', org.id)));
+      await Promise.all(inv.docs.map(x => F.updateDoc(x.ref, { orgName: name }).catch(() => {})));
       org = { ...org, name };
     },
     async acceptInvite(inv) {
@@ -286,9 +294,10 @@ function createLocalStore() {
     async loadWorkspace() {
       const index = (await getMap('user:' + me.uid)).orgs || {};
       const orgs = [];
-      for (const [id, name] of Object.entries(index)) {
+      const allOrgs = await getMap('orgs');
+      for (const [id, cachedName] of Object.entries(index)) {
         const role = await myRole(id);
-        if (role) orgs.push({ id, name, role });
+        if (role) orgs.push({ id, name: allOrgs[id]?.name || cachedName, role });
       }
       const invites = Object.entries(await getMap('invites')).filter(([, v]) => v.email === me.email).map(([id, v]) => ({ id, ...v }));
       return { orgs, invites };
@@ -306,6 +315,9 @@ function createLocalStore() {
       await needAdmin();
       const orgs = await getMap('orgs'); orgs[org.id].name = name; await set('orgs', orgs);
       const u = await getMap('user:' + me.uid); u.orgs[org.id] = name; await set('user:' + me.uid, u);
+      const inv = await getMap('invites');
+      for (const k of Object.keys(inv)) if (inv[k].orgId === org.id) inv[k].orgName = name;
+      await set('invites', inv);
       org = { ...org, name };
     },
     async acceptInvite(inv) {
