@@ -11,8 +11,14 @@ SaaS de BI para pequenas e médias empresas: o cliente cria uma conta, importa p
   - datas `dd/mm/aaaa`, `aaaa-mm-dd` e `aaaammdd` (ex.: `D2_EMISSAO`)
   - códigos com zero à esquerda (`000123`) ficam como texto
   - espaços extras dos campos do Protheus são removidos
-- Painel automático: KPIs, barras por dimensão, rosca top 5, evolução mensal, tabela
-- Filtros por ano e por até 4 colunas, troca de dimensão/medida/cálculo
+- Painel automático montado na importação (KPIs, barras, rosca, evolução mensal, tabela)
+- **Editor de painel** (botão "Editar painel"):
+  - adicionar gráficos: Indicador, Colunas, Barras, Linha, Área, Pizza, Rosca, Tabela resumo, Tabela de dados
+  - renomear, trocar dimensão/medida/cálculo, Top N, ordenação e cor de cada gráfico
+  - arrastar pelo título para mudar a ordem e puxar o canto ◢ para mudar largura e altura
+  - escolher quais filtros aparecem (colunas de texto, Ano e Mês)
+  - duplicar e excluir gráficos
+- Clique numa barra, fatia ou linha da tabela resumo para filtrar o painel
 - Salvar o layout do painel e exportar CSV filtrado
 - Cada cliente só vê os próprios dados (regras do Firestore)
 - **Modo demo**: sem configurar o Firebase, tudo roda no navegador

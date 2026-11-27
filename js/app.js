@@ -4,7 +4,7 @@
 import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js';
 import { createStore } from './store.js';
 import { readFile, normalizeRows } from './parser.js';
-import { renderDashboard, suggestConfig } from './dashboard.js';
+import { mountDashboard, suggestConfig } from './dashboard.js';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -270,15 +270,10 @@ async function showDashboard(id) {
   } catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o painel.</div>`; return; }
 
   document.querySelector('.topbar h1').textContent = ds.name;
-  let cfg = ds.dashboard || suggestConfig(ds, rows);
-  const draw = () => renderDashboard(view, ds, rows, cfg, {
-    onChange: next => { cfg = next; draw(); },
-    onSave: async c => {
-      try { await store.updateDashboard(id, c); ds.dashboard = c; toast('Painel salvo.'); }
-      catch (e) { console.error(e); toast('Erro ao salvar o painel.', 'err'); }
-    }
+  mountDashboard(view, ds, rows, ds.dashboard, async cfg => {
+    try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; toast('Painel salvo.'); }
+    catch (e) { console.error(e); toast('Erro ao salvar o painel.', 'err'); throw e; }
   });
-  draw();
 }
 
 // ---------------- Conectores ----------------
