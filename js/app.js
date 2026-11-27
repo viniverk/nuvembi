@@ -1,10 +1,10 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=8';
-import { createStore, ROLES } from './store.js?v=8';
-import { readFile, normalizeRows } from './parser.js?v=8';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=8';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=9';
+import { createStore, ROLES } from './store.js?v=9';
+import { readFile, normalizeRows } from './parser.js?v=9';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=9';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -250,10 +250,11 @@ async function showHome() {
       <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : 'XLS'}</span>
         <div><h3>${esc(d.name)}</h3><small>${new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</small></div>
         ${d.shareId ? '<span class="badge ok shared-badge" title="Tem link público ativo">🔗 Link ativo</span>' : ''}</div>
-      <p class="muted">${nf.format(d.rowCount)} linhas · ${d.columns.length} colunas</p>
+      <p class="muted">${nf.format(d.rowCount)} linhas · ${d.columns.length} colunas${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
       <div class="tags">${d.columns.slice(0, 5).map(c => `<span class="tag ${c.type}">${esc(c.name)}</span>`).join('')}${d.columns.length > 5 ? `<span class="tag">+${d.columns.length - 5}</span>` : ''}</div>
       <div class="ds-actions">
         <a class="btn small" href="#/painel/${encodeURIComponent(d.id)}">Abrir painel</a>
+        ${canEdit() ? `<button class="btn ghost small" data-refresh="${esc(d.id)}">⟳ Atualizar</button>` : ''}
         ${canEdit() ? `<button class="btn ghost small danger" data-del="${esc(d.id)}" data-name="${esc(d.name)}">Excluir</button>` : ''}
       </div>
     </article>`).join('')}</div>`;
@@ -265,6 +266,102 @@ async function showHome() {
     catch (e) { console.error(e); toast('Erro ao excluir.', 'err'); b.disabled = false; }
   }));
   bindInviteButtons(view);
+  view.querySelectorAll('[data-refresh]').forEach(b => b.addEventListener('click', () => openRefresh(list.find(d => d.id === b.dataset.refresh))));
+}
+
+// ---------------- Atualizar dados de um painel ----------------
+function openRefresh(ds) {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <div class="modal card">
+      <header><h2>Atualizar dados de "${esc(ds.name)}"</h2><button class="x" data-close>×</button></header>
+      <div class="modal-body">
+        <p class="muted">Envie a planilha nova. Gráficos, filtros, itens mestres e o link compartilhado continuam iguais.</p>
+        <div class="mode-pick">
+          <label class="check"><input type="radio" name="rmode" value="replace" checked><span><strong>Substituir</strong> todos os dados pelos da planilha</span></label>
+          <label class="check"><input type="radio" name="rmode" value="append"><span><strong>Acrescentar</strong> as linhas da planilha ao final (ex.: fechamento do mês)</span></label>
+        </div>
+        <label class="drop small-drop"><input type="file" id="rfile" accept=".xlsx,.xls,.xlsm,.csv,.txt" hidden>
+          <strong>Escolher planilha</strong><span class="muted">Excel ou CSV</span></label>
+        <div id="rsummary"></div>
+      </div>
+      <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="rgo" disabled>Atualizar painel</button></footer>
+    </div>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+  const summary = back.querySelector('#rsummary');
+  const go = back.querySelector('#rgo');
+  let sheets = null, sheet = null;
+
+  // liga cada coluna da planilha nova à coluna do painel com o mesmo nome (sem diferenciar maiúsculas)
+  const mapColumns = sh => sh.columns.map(c => {
+    const old = ds.columns.find(o => o.name.toLowerCase() === c.name.toLowerCase());
+    return old ? { ...c, name: old.name, type: old.type, matched: true } : { ...c, matched: false };
+  });
+
+  const paint = () => {
+    if (!sheet) return;
+    const mapped = mapColumns(sheet);
+    const same = mapped.filter(c => c.matched), extra = mapped.filter(c => !c.matched);
+    const missing = ds.columns.filter(o => !mapped.some(c => c.name === o.name));
+    const append = back.querySelector('input[name=rmode]:checked').value === 'append';
+    const total = append ? ds.rowCount + sheet.data.length : sheet.data.length;
+    summary.innerHTML = `
+      ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="rsheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
+      <div class="refresh-summary">
+        <div><strong>${nf.format(sheet.data.length)}</strong> linhas na planilha → o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas
+          ${append ? `<span class="muted">(${nf.format(ds.rowCount)} atuais + ${nf.format(sheet.data.length)} novas)</span>` : ''}</div>
+        <div class="ok-text">✓ ${same.length} coluna(s) iguais às do painel</div>
+        ${extra.length ? `<div>+ ${extra.length} coluna(s) nova(s): ${extra.map(c => esc(c.name)).join(', ')}</div>` : ''}
+        ${missing.length ? `<div class="warn-text">⚠ Não encontradas na planilha: ${missing.map(c => esc(c.name)).join(', ')}.${append ? ' As linhas novas ficam sem esses valores.' : ' Gráficos e filtros que usam essas colunas vão ficar vazios.'}</div>` : ''}
+        ${!same.length ? '<div class="error">Nenhuma coluna bate com o painel — parece ser outra planilha.</div>' : ''}
+        ${total > MAX_ROWS ? `<div class="warn-text">⚠ Passa do limite de ${nf.format(MAX_ROWS)} linhas; o excedente fica de fora.</div>` : ''}
+        ${append ? '<div class="muted small">Dica: o sistema não remove linhas repetidas. Se a planilha já tem os meses anteriores, use "Substituir".</div>' : ''}
+      </div>`;
+    summary.querySelector('#rsheet')?.addEventListener('change', e => { sheet = sheets[+e.target.value]; paint(); });
+    go.disabled = !same.length;
+  };
+  back.querySelectorAll('input[name=rmode]').forEach(r => r.addEventListener('change', paint));
+  back.querySelector('#rfile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    summary.innerHTML = `<div class="muted">Lendo ${esc(file.name)}…</div>`;
+    try { sheets = await readFile(file); }
+    catch (err) { console.error(err); summary.innerHTML = `<div class="error">Não consegui ler este arquivo.</div>`; return; }
+    if (!sheets.length) { summary.innerHTML = '<div class="error">O arquivo está vazio.</div>'; return; }
+    // escolhe a aba que mais combina com as colunas do painel
+    const score = s => mapColumns(s).filter(c => c.matched).length;
+    sheet = [...sheets].sort((a, b) => score(b) - score(a))[0];
+    back.querySelector('.small-drop strong').textContent = file.name;
+    paint();
+  });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    const append = back.querySelector('input[name=rmode]:checked').value === 'append';
+    const mapped = mapColumns(sheet);
+    try {
+      go.textContent = 'Preparando…';
+      let rows = normalizeRows(mapped, sheet.data);
+      let columns = mapped.map(({ name, type }) => ({ name, type }));
+      if (append) {
+        const old = rowsCache.get(ds.id) || await store.loadRows(ds.id);
+        rows = old.concat(rows);
+        columns = [...ds.columns, ...columns.filter(c => !ds.columns.some(o => o.name === c.name))];
+      }
+      rows = rows.slice(0, MAX_ROWS);
+      await store.replaceData(ds.id, { columns, rowCount: rows.length }, rows, p => (go.textContent = `Enviando… ${Math.round(p * 100)}%`));
+      rowsCache.set(ds.id, rows);
+      close();
+      toast(`Dados atualizados: ${nf.format(rows.length)} linhas.`);
+      if (location.hash === `#/painel/${encodeURIComponent(ds.id)}`) showDashboard(ds.id); else location.hash = `#/painel/${encodeURIComponent(ds.id)}`;
+    } catch (err) {
+      console.error(err); toast('Não foi possível atualizar os dados.', 'err');
+      go.disabled = false; go.textContent = 'Atualizar painel';
+    }
+  });
 }
 
 // ---------------- Importar ----------------
@@ -356,7 +453,7 @@ async function handleFile(file) {
 // ---------------- Painel ----------------
 async function showDashboard(id) {
   const view = shell('home', 'Carregando painel…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost" href="#/">← Voltar</a>${canEdit() ? '<button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
+    `<a class="btn ghost" href="#/">← Voltar</a>${canEdit() ? '<button class="btn ghost" id="btn-refresh">⟳ Atualizar dados</button><button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
   let ds, rows;
   try {
     const list = await store.listDatasets();
@@ -368,6 +465,7 @@ async function showDashboard(id) {
 
   document.querySelector('.topbar h1').textContent = ds.name;
   document.getElementById('btn-share')?.addEventListener('click', () => openShare(ds));
+  document.getElementById('btn-refresh')?.addEventListener('click', () => openRefresh(ds));
   mountDashboard(view, ds, rows, ds.dashboard, canEdit() ? async cfg => {
     try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; toast('Painel salvo.'); }
     catch (e) { console.error(e); toast('Erro ao salvar o painel.', 'err'); throw e; }

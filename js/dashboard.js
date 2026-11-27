@@ -6,6 +6,8 @@
 //    para redimensionar
 // =============================================================
 
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=9';
+
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
 const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -37,6 +39,8 @@ const clone = o => JSON.parse(JSON.stringify(o));
 
 // ---------------- rótulos de valores (plugin próprio do Chart.js) ----------------
 const LABELS = { none: 'Não mostrar', value: 'Valor', percent: 'Percentual', both: 'Valor e %' };
+// formatador de cada gráfico, guardado fora das opções do Chart.js (que chamaria a função com outro argumento)
+const FMT_BY_CANVAS = new WeakMap();
 const fmtLabel = v => Math.abs(v) >= 10000 ? nfc.format(v) : nf.format(v);
 const valueLabelsPlugin = {
   id: 'valueLabels',
@@ -56,7 +60,8 @@ const valueLabelsPlugin = {
       const pct = total ? v / total * 100 : 0;
       if (o.kind === 'pie' && pct < 4) return; // fatias muito pequenas
       const pctTxt = nf.format(Math.round(pct * 10) / 10) + '%';
-      const text = o.mode === 'percent' ? pctTxt : o.mode === 'both' ? `${fmtLabel(v)} (${pctTxt})` : fmtLabel(v);
+      const f = FMT_BY_CANVAS.get(chart.canvas) || fmtLabel;
+      const text = o.mode === 'percent' ? pctTxt : o.mode === 'both' ? `${f(v)} (${pctTxt})` : f(v);
       let x, y;
       if (o.kind === 'pie') {
         ({ x, y } = el.tooltipPosition());
@@ -177,7 +182,21 @@ function dateLabel(k, grain) {
   const [y, m] = k.split('-'); return `${MONTHS[+m - 1]}/${y.slice(2)}`;
 }
 
+// ---------- itens mestres ----------
+let MASTERS = [], COLUMNS = [];
+const masterOf = w => (w.measure || '').startsWith('m:') ? MASTERS.find(m => m.id === w.measure.slice(2)) || { missing: true, name: '(item mestre excluído)', expr: '' } : null;
+const compiledOf = m => m.missing ? { error: 'excluído' } : compile(m.expr, COLUMNS);
+const fmtOf = w => (w.format && w.format !== 'auto') ? w.format : (masterOf(w)?.format || 'number');
+const fv = (w, v, short) => formatValue(v, fmtOf(w), short);
+
 function aggregate(rows, keyFn, w) {
+  const master = masterOf(w);
+  if (master) {
+    const c = compiledOf(master);
+    const groups = new Map();
+    for (const r of rows) { const k = keyFn(r); if (k === null) continue; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
+    return [...groups].map(([k, arr]) => [k, c.error ? null : c.fn(arr)]);
+  }
   const m = new Map();
   for (const r of rows) {
     const k = keyFn(r);
@@ -196,8 +215,35 @@ function aggregate(rows, keyFn, w) {
   return [...m].map(([k, a]) => [k, val(a)]);
 }
 
-const isAdditive = w => w.measure === '__count' || w.agg === 'sum' || w.agg === 'count';
-const measureLabel = w => w.measure === '__count' ? 'Quantidade de linhas' : `${AGG[w.agg]} de ${w.measure}`;
+const isAdditive = w => {
+  const m = masterOf(w);
+  if (m) return !!compiledOf(m).additive;
+  return w.measure === '__count' || w.agg === 'sum' || w.agg === 'count';
+};
+const measureLabel = w => masterOf(w)?.name || (w.measure === '__count' ? 'Quantidade de linhas' : `${AGG[w.agg]} de ${w.measure}`);
+// valor único de um conjunto de linhas (KPI e comparativos)
+const valueOf = (rows, w) => { const r = aggregate(rows, () => 'all', w)[0]; return r ? r[1] : (masterOf(w) ? null : 0); };
+
+// ---------- comparativos de período ----------
+export const PERIODS = { all: 'Tudo (conforme filtros)', month: 'Último mês com dados', ytd: 'Acumulado do ano' };
+export const COMPARES = { none: 'Não comparar', prev: 'Período anterior', yoy: 'Mesmo período do ano anterior' };
+const pad2 = n => String(n).padStart(2, '0');
+function shiftMonth(ym, delta) { let [y, m] = ym.split('-').map(Number); m += delta; while (m < 1) { m += 12; y--; } while (m > 12) { m -= 12; y++; } return `${y}-${pad2(m)}`; }
+// devolve { test(iso), label } para o período pedido em relação à data de referência
+function periodWindow(ref, period, compare) {
+  const y = +ref.slice(0, 4), ym = ref.slice(0, 7), md = ref.slice(5);
+  const mlabel = k => `${MONTHS[+k.slice(5, 7) - 1]}/${k.slice(2, 4)}`;
+  if (period === 'month') {
+    const k = compare === 'prev' ? shiftMonth(ym, -1) : compare === 'yoy' ? shiftMonth(ym, -12) : ym;
+    return { test: d => d && d.slice(0, 7) === k, label: mlabel(k) };
+  }
+  if (period === 'ytd') {
+    const yy = compare ? y - 1 : y; // no acumulado, "anterior" e "ano anterior" são o mesmo período do ano passado
+    const end = `${yy}-${md}`;
+    return { test: d => d && d >= `${yy}-01-01` && d <= end, label: `jan–${MONTHS[+md.slice(0, 2) - 1]}/${String(yy).slice(2)}` };
+  }
+  return null;
+}
 
 function autoTitle(w, ds) {
   if (w.type === 'datatable') return 'Dados';
@@ -245,6 +291,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   const numCols = cols.filter(c => c.type === 'number');
   if (cfg.dateCol && !dateCols.find(c => c.name === cfg.dateCol)) cfg.dateCol = dateCols[0]?.name || null;
   cfg.filters = normFilters(cfg.filters);
+  cfg.masters = cfg.masters || [];
+  saved.masters = saved.masters || [];
   saved.filters = normFilters(saved.filters);
 
   // ---------- seleções (estilo Qlik): histórico para voltar/avançar ----------
@@ -270,8 +318,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   // ---------- desfazer / refazer do modo edição ----------
   // guarda o layout antes de cada mudança (posição, tamanho, gráficos, escolha de filtros)
   let undoStack = [], redoStack = [], lastSnap = null;
-  const snapshot = () => clone({ widgets: cfg.widgets, filterCols: cfg.filterCols, dateCol: cfg.dateCol });
-  const restore = snap => { cfg.widgets = clone(snap.widgets); cfg.filterCols = clone(snap.filterCols); cfg.dateCol = snap.dateCol; };
+  const snapshot = () => clone({ widgets: cfg.widgets, filterCols: cfg.filterCols, dateCol: cfg.dateCol, masters: cfg.masters });
+  const restore = snap => { cfg.widgets = clone(snap.widgets); cfg.filterCols = clone(snap.filterCols); cfg.dateCol = snap.dateCol; cfg.masters = clone(snap.masters || []); };
   function resetUndo() { undoStack = []; redoStack = []; lastSnap = snapshot(); }
   function markDirty() {
     dirty = true;
@@ -313,6 +361,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   const opt = (v, label, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(label)}</option>`;
 
   function draw() {
+    MASTERS = cfg.masters; COLUMNS = cols;
     charts.forEach(c => c.destroy());
     charts.clear();
     const rows = applyFilters(allRows, cfg, cfg.dateCol);
@@ -326,6 +375,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
           <button class="btn ghost icon" data-act="redo" title="Refazer (Ctrl+Y)" ${redoStack.length ? '' : 'disabled'}>↷</button>
         </div>
         <button class="btn ghost" data-act="filters">⚲ Escolher filtros</button>
+        <button class="btn ghost" data-act="masters">ƒ Itens mestres</button>
         <button class="btn ghost" data-act="add">+ Adicionar gráfico</button>
         <button class="btn ghost" data-act="cancel">Cancelar</button>
         <button class="btn" data-act="save">Salvar painel</button>
@@ -380,7 +430,9 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       ${!cfg.widgets.length && !editing ? '<div class="card empty"><p>Este painel está vazio. Clique em <strong>Editar painel</strong> para adicionar gráficos.</p></div>' : ''}`;
 
     layout();
-    cfg.widgets.forEach(w => fillWidget(w, rows));
+    const dateless = { filters: Object.fromEntries(Object.entries(cfg.filters).filter(([k]) => k !== '__year' && k !== '__month')) };
+    const ctx = { rowsNoDate: applyFilters(allRows, dateless, cfg.dateCol) };
+    cfg.widgets.forEach(w => fillWidget(w, rows, ctx));
     bindEvents();
   }
 
@@ -467,14 +519,40 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     if (bg) bg.style.backgroundSize = `${m.colW}px ${ROW * 4}px`;
   }
 
-  function fillWidget(w, rows) {
+  function fillWidget(w, rows, ctx) {
     const body = el.querySelector(`.widget[data-id="${w.id}"] .w-body`);
     if (!body) return;
     const color = PALETTE[w.color || 0] || PALETTE[0];
+    const master = masterOf(w);
+    if (master && compiledOf(master).error) {
+      body.innerHTML = `<div class="muted center small">Item mestre com problema: ${esc(master.missing ? 'foi excluído' : compiledOf(master).error)}</div>`;
+      return;
+    }
 
     if (w.type === 'kpi') {
-      const v = aggregate(rows, () => 'all', w)[0]?.[1] ?? 0;
-      body.innerHTML = `<div class="kpi-val" style="color:${color}" title="${nf.format(v)}">${Math.abs(v) >= 1e5 ? nfc.format(v) : nf.format(v)}</div>`;
+      const dcol = cfg.dateCol;
+      const period = dcol ? (w.period || 'all') : 'all';
+      let v, sub = '';
+      if (period === 'all') {
+        v = valueOf(rows, w);
+      } else {
+        // data de referência = a mais recente nas linhas filtradas
+        let ref = '';
+        for (const r of rows) { const d = r[dcol]; if (d && d > ref) ref = d; }
+        if (!ref) { body.innerHTML = '<div class="muted center small">Sem datas no filtro atual.</div>'; return; }
+        const cur = periodWindow(ref, period);
+        v = valueOf(ctx.rowsNoDate.filter(r => cur.test(r[dcol])), w);
+        sub = `<div class="kpi-period">${esc(cur.label)}</div>`;
+        if (w.compare && w.compare !== 'none') {
+          const prev = periodWindow(ref, period, w.compare);
+          const pv = valueOf(ctx.rowsNoDate.filter(r => prev.test(r[dcol])), w);
+          const delta = (pv === null || v === null || pv === 0) ? null : (v - pv) / Math.abs(pv);
+          const cls = delta === null ? '' : delta >= 0 ? 'up' : 'down';
+          const deltaTxt = delta === null ? '—' : `${delta >= 0 ? '▲' : '▼'} ${formatValue(Math.abs(delta), 'percent')}`;
+          sub = `<div class="kpi-compare"><span class="delta ${cls}">${deltaTxt}</span> vs ${esc(prev.label)} <span class="muted">(${esc(fv(w, pv, true))})</span></div>${sub}`;
+        }
+      }
+      body.innerHTML = `<div class="kpi-val" style="color:${color}" title="${esc(fv(w, v))}">${esc(fv(w, v, true))}</div>${sub}`;
       return;
     }
     if (w.type === 'datatable') {
@@ -488,13 +566,13 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     if (!g.values.length) { body.innerHTML = '<div class="muted center">Sem dados para este filtro.</div>'; return; }
 
     if (w.type === 'table') {
-      const total = g.values.reduce((s, v) => s + v, 0);
-      const max = Math.max(...g.values.map(Math.abs)) || 1;
+      const total = g.values.reduce((s, v) => s + (v || 0), 0);
+      const max = Math.max(...g.values.map(v => Math.abs(v || 0))) || 1;
       body.innerHTML = `<div class="table-wrap fill"><table class="summary">
         <thead><tr><th>${esc(w.dim)}</th><th class="number">${esc(measureLabel(w))}</th>${isAdditive(w) ? '<th class="number">%</th>' : ''}</tr></thead>
         <tbody>${g.labels.map((l, i) => `<tr data-key="${esc(g.keys[i])}" class="${g.isDate ? '' : 'clickable'}">
-          <td><div class="bar-cell"><span style="width:${Math.abs(g.values[i]) / max * 100}%;background:${color}22"></span>${esc(l)}</div></td>
-          <td class="number">${nf.format(g.values[i])}</td>
+          <td><div class="bar-cell"><span style="width:${Math.abs(g.values[i] || 0) / max * 100}%;background:${color}22"></span>${esc(l)}</div></td>
+          <td class="number">${esc(fv(w, g.values[i]))}</td>
           ${isAdditive(w) ? `<td class="number">${total ? nf.format(g.values[i] / total * 100) : 0}%</td>` : ''}</tr>`).join('')}</tbody>
       </table></div>`;
       if (!g.isDate) body.querySelectorAll('tr[data-key]').forEach(tr => tr.addEventListener('click', () => toggleFilter(w.dim, tr.dataset.key)));
@@ -506,6 +584,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     Chart.defaults.font.family = 'Inter, system-ui, sans-serif';
     Chart.defaults.color = '#475569';
     const canvas = body.querySelector('canvas');
+    FMT_BY_CANVAS.set(canvas, v => fv(w, v, true));
     const pie = w.type === 'pie' || w.type === 'doughnut';
     const line = w.type === 'line' || w.type === 'area';
     const onClick = (evt, els) => {
@@ -514,7 +593,9 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       // adia para depois do Chart.js terminar de tratar o clique
       if (key !== '__outros') setTimeout(() => toggleFilter(w.dim, String(key)), 0);
     };
-    const tooltip = { callbacks: { label: c => ` ${pie ? c.label + ': ' : ''}${nf.format(c.raw)}` } };
+    const tooltip = { callbacks: { label: c => ` ${pie ? c.label + ': ' : ''}${fv(w, c.raw)}` } };
+    const fmtShort = v => fv(w, v, true);
+    const axisTick = function (v) { const l = this.type === 'category' ? this.getLabelForValue(v) : v; return typeof l === 'number' ? fmtShort(l) : String(l).slice(0, 20); };
     let chart;
     if (pie) {
       const colors = g.keys.map((k, i) => k === '__outros' ? '#cbd5e1' : PALETTE[(i + (w.color || 0)) % (PALETTE.length - 1)]);
@@ -542,7 +623,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
           indexAxis: w.type === 'hbar' ? 'y' : 'x',
           plugins: { legend: { display: false }, tooltip, valueLabels: { mode: labelsOf(w), kind: w.type === 'hbar' ? 'hbar' : line ? 'line' : 'bar' } },
           layout: { padding: !showLabels ? 0 : w.type === 'hbar' ? { right: labelsOf(w) === 'both' ? 90 : 50 } : line ? { top: 22, left: 12, right: 30 } : { top: 20 } },
-          scales: { x: { grid: { display: w.type === 'hbar' }, ticks: { callback: tick } }, y: { grid: { color: '#eef2f7', display: w.type !== 'hbar' }, ticks: { callback: tick } } }
+          scales: { x: { grid: { display: w.type === 'hbar' }, ticks: { callback: axisTick } }, y: { grid: { color: '#eef2f7', display: w.type !== 'hbar' }, ticks: { callback: axisTick } } }
         }
       });
     }
@@ -628,6 +709,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     el.querySelectorAll('.filter-dd').forEach(b => b.addEventListener('click', () => openListbox(b.dataset.field, b)));
     act('add', () => editWidget(null));
     act('filters', chooseFilters);
+    act('masters', manageMasters);
     if (!editing) return;
 
     el.querySelectorAll('.widget[data-id]').forEach(sec => {
@@ -739,11 +821,19 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         <label class="field" data-show="dim"><span>Analisar por</span><select name="dim">${dimOpts}</select></label>
         <label class="field" data-show="grain"><span>Agrupar data por</span><select name="grain">${Object.entries(GRAINS).map(([k, v]) => opt(k, v, k === (base.grain || 'month'))).join('')}</select></label>
         <label class="field" data-show="measure"><span>Medida</span><select name="measure">
+          ${cfg.masters.length ? `<optgroup label="Itens mestres">${cfg.masters.map(m => opt('m:' + m.id, 'ƒ ' + m.name, base.measure === 'm:' + m.id)).join('')}</optgroup>` : ''}
+          <optgroup label="Campos">
           ${opt('__count', 'Quantidade de linhas', base.measure === '__count')}
-          ${numCols.map(c => opt(c.name, c.name, c.name === base.measure)).join('')}</select></label>
+          ${numCols.map(c => opt(c.name, c.name, c.name === base.measure)).join('')}</optgroup></select></label>
         <label class="field" data-show="agg"><span>Cálculo</span><select name="agg">${Object.entries(AGG).map(([k, v]) => opt(k, v, k === base.agg)).join('')}</select></label>
         <label class="field" data-show="top"><span>Mostrar</span><select name="top">
           ${[[0, 'Todos os itens'], [5, 'Top 5'], [10, 'Top 10'], [15, 'Top 15'], [20, 'Top 20'], [30, 'Top 30'], [50, 'Top 50']].map(([v, l]) => opt(v, l, +base.top === v)).join('')}</select></label>
+        <label class="field" data-show="format"><span>Formato do número</span><select name="format">
+          ${Object.entries(FORMATS).map(([k, v]) => opt(k, v, k === (base.format || 'auto'))).join('')}</select></label>
+        <label class="field" data-show="period"><span>Período do indicador</span><select name="period">
+          ${Object.entries(PERIODS).map(([k, v]) => opt(k, v, k === (base.period || 'all'))).join('')}</select></label>
+        <label class="field" data-show="compare"><span>Comparar com</span><select name="compare">
+          ${Object.entries(COMPARES).map(([k, v]) => opt(k, v, k === (base.compare || 'none'))).join('')}</select></label>
         <label class="field" data-show="sort"><span>Ordenar por</span><select name="sort">
           ${opt('desc', 'Maior valor primeiro', base.sort === 'desc')}${opt('asc', 'Menor valor primeiro', base.sort === 'asc')}${opt('label', 'Nome / data (A→Z)', base.sort === 'label')}</select></label>
       </div>
@@ -757,7 +847,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       const w = {
         ...base, type: t, title: form.wtitle.value.trim(), dim: form.dim.value || null, grain: form.grain.value,
         measure: form.measure.value, agg: form.measure.value === '__count' ? 'count' : form.agg.value,
-        top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value
+        top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
+        format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value
       };
       if (isNew) {
         w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
@@ -767,6 +858,9 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       } else {
         cfg.widgets[cfg.widgets.findIndex(x => x.id === existing.id)] = w;
       }
+      // indicador com período/comparação precisa de mais altura para as linhas extras
+      const minGh = t === 'kpi' ? (w.compare && w.compare !== 'none' ? 18 : (w.period && w.period !== 'all') ? 16 : 0) : 0;
+      if (minGh && (w.gh || 0) < minGh) { w.gh = minGh; resolve(w); }
       markDirty(); draw();
     });
 
@@ -778,7 +872,10 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         dim: !['kpi', 'datatable'].includes(t),
         grain: !['kpi', 'datatable'].includes(t) && dimCol?.type === 'date',
         measure: t !== 'datatable',
-        agg: t !== 'datatable' && form.measure.value !== '__count',
+        agg: t !== 'datatable' && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
+        format: t !== 'datatable',
+        period: t === 'kpi' && !!cfg.dateCol,
+        compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
         top: !['kpi', 'datatable'].includes(t),
         sort: !['kpi', 'datatable'].includes(t),
         color: !['datatable', 'table'].includes(t),
@@ -801,6 +898,83 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       refresh();
     }));
     refresh();
+  }
+
+  // ---------------- janela: itens mestres ----------------
+  function manageMasters() {
+    const usedBy = id => cfg.widgets.filter(w => w.measure === 'm:' + id).length;
+    const body = `
+      <p class="muted">Medidas com nome que você cria uma vez e usa em qualquer gráfico, como no Qlik. Ex.: <code>Faturamento</code>, <code>Ticket médio</code>, <code>% da meta</code>.</p>
+      <div class="master-list">${cfg.masters.map(m => {
+        const c = compile(m.expr, cols);
+        return `<div class="master-item">
+          <div class="mi-main"><strong>ƒ ${esc(m.name)}</strong><code>${esc(m.expr)}</code>
+            <small class="${c.error ? 'error' : 'muted'}">${c.error ? '⚠ ' + esc(c.error) : `${esc(FORMATS[m.format || 'number'])} · usado em ${usedBy(m.id)} gráfico(s)`}</small></div>
+          <div class="row-actions"><button type="button" class="btn ghost small" data-medit="${m.id}">Editar</button>
+            <button type="button" class="btn ghost small danger" data-mdel="${m.id}">Excluir</button></div>
+        </div>`;
+      }).join('') || '<div class="muted">Nenhum item mestre ainda.</div>'}</div>
+      <button type="button" class="btn ghost" data-mnew>+ Novo item mestre</button>`;
+    const modal = openModal('Itens mestres', body, 'Fechar', () => {});
+    modal.querySelector('[data-close]').remove();
+    modal.querySelector('[data-mnew]').addEventListener('click', () => { modal.remove(); editMaster(null); });
+    modal.querySelectorAll('[data-medit]').forEach(b => b.addEventListener('click', () => { modal.remove(); editMaster(cfg.masters.find(m => m.id === b.dataset.medit)); }));
+    modal.querySelectorAll('[data-mdel]').forEach(b => b.addEventListener('click', () => {
+      const m = cfg.masters.find(x => x.id === b.dataset.mdel);
+      const n = usedBy(m.id);
+      if (!confirm(`Excluir o item mestre "${m.name}"?${n ? `\n${n} gráfico(s) usam ele e vão passar a mostrar "Quantidade de linhas".` : ''}`)) return;
+      cfg.masters = cfg.masters.filter(x => x !== m);
+      cfg.widgets.forEach(w => { if (w.measure === 'm:' + m.id) { w.measure = '__count'; w.agg = 'count'; } });
+      markDirty(); modal.remove(); draw(); manageMasters();
+    }));
+  }
+
+  function editMaster(existing) {
+    const m = existing ? clone(existing) : { id: uid(), name: '', expr: numCols[0] ? `Sum([${numCols[0].name}])` : 'Count([' + (cols[0]?.name || 'Campo') + '])', format: 'number' };
+    const body = `
+      <label class="field"><span>Nome</span><input name="mname" value="${esc(m.name)}" placeholder="Ex.: Faturamento" required maxlength="60"></label>
+      <label class="field"><span>Fórmula</span><textarea name="mexpr" rows="3" spellcheck="false">${esc(m.expr)}</textarea></label>
+      <div class="expr-status" data-status></div>
+      <div class="expr-help">
+        <div><small class="muted">Campos — clique para inserir</small><div class="chips">${cols.map(c => `<button type="button" class="chip-btn ${c.type}" data-ins="[${esc(c.name)}]">${esc(c.name)}</button>`).join('')}</div></div>
+        <div><small class="muted">Funções</small><div class="chips">${FUNCTIONS_HELP.map(([f, d]) => `<button type="button" class="chip-btn fn" data-ins="${esc(f.replace('[Campo]', '').replace('()', '(').replace('(Distinct )', '(Distinct '))}" title="${esc(d)}">${esc(f)}</button>`).join('')}
+          <button type="button" class="chip-btn op" data-ins=" / ">÷</button><button type="button" class="chip-btn op" data-ins=" * ">×</button><button type="button" class="chip-btn op" data-ins=" - ">−</button><button type="button" class="chip-btn op" data-ins=" + ">+</button></div></div>
+        <details><summary>Exemplos</summary><ul class="small">
+          <li><code>Sum([Valor_Total])</code> — faturamento</li>
+          <li><code>Sum([Valor_Total]) / Count(Distinct [Nota])</code> — ticket médio por nota</li>
+          <li><code>Sum([Realizado]) / Sum([Meta])</code> — % da meta (formato Percentual)</li>
+          <li><code>Sum([Quantidade] * [Preço])</code> — conta linha a linha e depois soma</li>
+        </ul></details>
+      </div>
+      <label class="field"><span>Formato</span><select name="mformat">${Object.entries(FORMATS).filter(([k]) => k !== 'auto').map(([k, v]) => opt(k, v, k === (m.format || 'number'))).join('')}</select></label>`;
+    const modal = openModal(existing ? 'Editar item mestre' : 'Novo item mestre', body, 'Salvar', form => {
+      const c = compile(form.mexpr.value, cols);
+      const name = form.mname.value.trim();
+      if (c.error || !name) return false;
+      Object.assign(m, { name, expr: form.mexpr.value.trim(), format: form.mformat.value });
+      if (existing) cfg.masters[cfg.masters.findIndex(x => x.id === m.id)] = m; else cfg.masters.push(m);
+      markDirty(); draw(); setTimeout(manageMasters, 0);
+    });
+    const form = modal.querySelector('form');
+    const status = modal.querySelector('[data-status]');
+    const check = () => {
+      const c = compile(form.mexpr.value, cols);
+      const rowsNow = applyFilters(allRows, cfg, cfg.dateCol);
+      status.className = 'expr-status ' + (c.error ? 'bad' : 'ok');
+      status.textContent = c.error ? '⚠ ' + c.error : `✓ Fórmula válida — com os filtros atuais dá ${formatValue(c.fn(rowsNow), form.mformat.value)}`;
+      form.querySelector('button[type=submit]').disabled = !!c.error || !form.mname.value.trim();
+    };
+    modal.querySelectorAll('[data-ins]').forEach(b => b.addEventListener('click', () => {
+      const ta = form.mexpr, ins = b.dataset.ins;
+      const a = ta.selectionStart ?? ta.value.length, z = ta.selectionEnd ?? a;
+      ta.value = ta.value.slice(0, a) + ins + ta.value.slice(z);
+      ta.focus(); ta.selectionStart = ta.selectionEnd = a + ins.length;
+      check();
+    }));
+    form.mexpr.addEventListener('input', check);
+    form.mname.addEventListener('input', check);
+    form.mformat.addEventListener('change', check);
+    check();
   }
 
   // ---------------- janela: escolher filtros ----------------
@@ -858,7 +1032,7 @@ function openModal(title, bodyHtml, okLabel, onOk) {
   back.addEventListener('mousedown', e => { if (e.target === back) close(); });
   back.querySelectorAll('.x,[data-close]').forEach(b => b.addEventListener('click', close));
   const form = back.querySelector('form');
-  form.addEventListener('submit', e => { e.preventDefault(); onOk(form); close(); });
+  form.addEventListener('submit', e => { e.preventDefault(); if (onOk(form) === false) return; close(); });
   setTimeout(() => form.querySelector('input:not([type=radio]):not([type=checkbox]), select')?.focus(), 30);
   return back;
 }

@@ -1,0 +1,121 @@
+FILIAL;DATA_EMISSAO;NOTA;COD_PRODUTO;PRODUTO;CATEGORIA;CLIENTE;ESTADO;QUANTIDADE;VALOR_TOTAL;Vendedor
+0101;20261215;000200000;000420;Cimento 50kg;Básicos;Obra Certa;PR;30;1.167,00;Carla
+0101;20261216;000200001;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;33;12.866,70;Carla
+0101;20261210;000200002;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;29;11.307,10;Ana
+0101;20261220;000200003;000101;Parafuso M8;Ferragens;Obra Certa;PR;3;7,50;Bruno
+0101;20261221;000200004;000420;Cimento 50kg;Básicos;Obra Certa;PR;40;1.556,00;Ana
+0101;20261202;000200005;000101;Parafuso M8;Ferragens;Obra Certa;PR;5;12,50;Ana
+0101;20261201;000200006;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;39;15.206,10;Bruno
+0101;20261227;000200007;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;38;11.362,00;Ana
+0101;20261216;000200008;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;19;7.408,10;Ana
+0101;20261214;000200009;000101;Parafuso M8;Ferragens;Casa & Obra;PR;18;45,00;Carla
+0101;20261211;000200010;000101;Parafuso M8;Ferragens;Obra Certa;PR;17;42,50;Ana
+0101;20261219;000200011;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;5;1.495,00;Ana
+0101;20261213;000200012;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;19;739,10;Ana
+0101;20261207;000200013;000101;Parafuso M8;Ferragens;Obra Certa;PR;1;2,50;Ana
+0101;20261223;000200014;000101;Parafuso M8;Ferragens;Casa & Obra;PR;25;62,50;Bruno
+0101;20261221;000200015;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;37;1.439,30;Ana
+0101;20261210;000200016;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;6;1.794,00;Bruno
+0101;20261205;000200017;000101;Parafuso M8;Ferragens;Casa & Obra;PR;8;20,00;Ana
+0101;20261215;000200018;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;4;10,00;Bruno
+0101;20261207;000200019;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;36;14.036,40;Bruno
+0101;20261214;000200020;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;9;3.509,10;Carla
+0101;20261214;000200021;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;26;1.011,40;Ana
+0101;20261210;000200022;000101;Parafuso M8;Ferragens;Casa & Obra;PR;38;95,00;Ana
+0101;20261228;000200023;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;26;10.137,40;Carla
+0101;20261207;000200024;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;10;25,00;Bruno
+0101;20261211;000200025;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;40;11.960,00;Bruno
+0101;20261203;000200026;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;5;194,50;Ana
+0101;20261212;000200027;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;39;15.206,10;Bruno
+0101;20261216;000200028;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;38;1.478,20;Carla
+0101;20261221;000200029;000205;Tinta Acrílica 18L;Tintas;Casa & Obra;PR;12;4.678,80;Ana
+0101;20261208;000200030;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;40;11.960,00;Carla
+0101;20261207;000200031;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;36;14.036,40;Carla
+0101;20261203;000200032;000420;Cimento 50kg;Básicos;Casa & Obra;PR;39;1.517,10;Bruno
+0101;20261202;000200033;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;7;17,50;Carla
+0101;20261209;000200034;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;26;7.774,00;Bruno
+0101;20261206;000200035;000420;Cimento 50kg;Básicos;Casa & Obra;PR;34;1.322,60;Carla
+0101;20261216;000200036;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;15;37,50;Carla
+0101;20261230;000200037;000101;Parafuso M8;Ferragens;Casa & Obra;PR;14;35,00;Ana
+0101;20261214;000200038;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;18;45,00;Bruno
+0101;20261206;000200039;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;3;1.169,70;Bruno
+0101;20261205;000200040;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;37;11.063,00;Ana
+0101;20261211;000200041;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;29;8.671,00;Carla
+0101;20261230;000200042;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;3;1.169,70;Ana
+0101;20261231;000200043;000420;Cimento 50kg;Básicos;Casa & Obra;PR;20;778,00;Ana
+0101;20261216;000200044;000101;Parafuso M8;Ferragens;Obra Certa;PR;5;12,50;Ana
+0101;20261203;000200045;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;9;2.691,00;Ana
+0101;20261224;000200046;000420;Cimento 50kg;Básicos;Obra Certa;PR;24;933,60;Ana
+0101;20261203;000200047;000205;Tinta Acrílica 18L;Tintas;Casa & Obra;PR;23;8.967,70;Carla
+0101;20261231;000200048;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;27;1.050,30;Ana
+0101;20261220;000200049;000420;Cimento 50kg;Básicos;Obra Certa;PR;1;38,90;Carla
+0101;20261201;000200050;000420;Cimento 50kg;Básicos;Casa & Obra;PR;38;1.478,20;Carla
+0101;20261221;000200051;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;6;15,00;Ana
+0101;20261213;000200052;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;22;6.578,00;Carla
+0101;20261227;000200053;000420;Cimento 50kg;Básicos;Casa & Obra;PR;30;1.167,00;Carla
+0101;20261201;000200054;000101;Parafuso M8;Ferragens;Obra Certa;PR;33;82,50;Bruno
+0101;20261208;000200055;000101;Parafuso M8;Ferragens;Casa & Obra;PR;2;5,00;Carla
+0101;20261222;000200056;000101;Parafuso M8;Ferragens;Casa & Obra;PR;40;100,00;Bruno
+0101;20261210;000200057;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;24;7.176,00;Ana
+0101;20261225;000200058;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;11;4.288,90;Bruno
+0101;20261211;000200059;000420;Cimento 50kg;Básicos;Casa & Obra;PR;16;622,40;Bruno
+0101;20261226;000200060;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;28;8.372,00;Ana
+0101;20261219;000200061;000205;Tinta Acrílica 18L;Tintas;Casa & Obra;PR;15;5.848,50;Bruno
+0101;20261216;000200062;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;9;3.509,10;Bruno
+0101;20261231;000200063;000101;Parafuso M8;Ferragens;Obra Certa;PR;5;12,50;Bruno
+0101;20261216;000200064;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;29;11.307,10;Bruno
+0101;20261221;000200065;000205;Tinta Acrílica 18L;Tintas;Casa & Obra;PR;25;9.747,50;Carla
+0101;20261223;000200066;000420;Cimento 50kg;Básicos;Obra Certa;PR;21;816,90;Carla
+0101;20261227;000200067;000420;Cimento 50kg;Básicos;Casa & Obra;PR;5;194,50;Ana
+0101;20261222;000200068;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;3;897,00;Carla
+0101;20261210;000200069;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;23;6.877,00;Carla
+0101;20261213;000200070;000101;Parafuso M8;Ferragens;Obra Certa;PR;9;22,50;Bruno
+0101;20261208;000200071;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;18;7.018,20;Ana
+0101;20261215;000200072;000101;Parafuso M8;Ferragens;Obra Certa;PR;8;20,00;Ana
+0101;20261207;000200073;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;13;3.887,00;Bruno
+0101;20261225;000200074;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;1;299,00;Bruno
+0101;20261209;000200075;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;15;37,50;Bruno
+0101;20261203;000200076;000205;Tinta Acrílica 18L;Tintas;Casa & Obra;PR;15;5.848,50;Bruno
+0101;20261215;000200077;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;29;1.128,10;Ana
+0101;20261219;000200078;000101;Parafuso M8;Ferragens;Casa & Obra;PR;36;90,00;Carla
+0101;20261221;000200079;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;21;6.279,00;Ana
+0101;20261207;000200080;000101;Parafuso M8;Ferragens;Obra Certa;PR;8;20,00;Ana
+0101;20261218;000200081;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;20;778,00;Bruno
+0101;20261212;000200082;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;2;598,00;Carla
+0101;20261211;000200083;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;29;72,50;Carla
+0101;20261230;000200084;000420;Cimento 50kg;Básicos;Casa & Obra;PR;32;1.244,80;Ana
+0101;20261226;000200085;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;28;10.917,20;Ana
+0101;20261222;000200086;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;22;8.577,80;Ana
+0101;20261229;000200087;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;34;1.322,60;Carla
+0101;20261231;000200088;000420;Cimento 50kg;Básicos;Casa & Obra;PR;38;1.478,20;Carla
+0101;20261217;000200089;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;29;72,50;Carla
+0101;20261221;000200090;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;36;10.764,00;Ana
+0101;20261231;000200091;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;25;7.475,00;Carla
+0101;20261231;000200092;000205;Tinta Acrílica 18L;Tintas;Casa & Obra;PR;10;3.899,00;Carla
+0101;20261207;000200093;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;32;9.568,00;Bruno
+0101;20261220;000200094;000101;Parafuso M8;Ferragens;Obra Certa;PR;1;2,50;Bruno
+0101;20261217;000200095;000101;Parafuso M8;Ferragens;Obra Certa;PR;3;7,50;Bruno
+0101;20261223;000200096;000101;Parafuso M8;Ferragens;Casa & Obra;PR;6;15,00;Ana
+0101;20261214;000200097;000101;Parafuso M8;Ferragens;Obra Certa;PR;30;75,00;Bruno
+0101;20261216;000200098;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;31;9.269,00;Ana
+0101;20261217;000200099;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;31;9.269,00;Bruno
+0101;20261220;000200100;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;27;67,50;Ana
+0101;20261202;000200101;000310;Furadeira 650W;Ferramentas;Construtora Alfa;SC;2;598,00;Ana
+0101;20261222;000200102;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;1;389,90;Bruno
+0101;20261208;000200103;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;23;6.877,00;Carla
+0101;20261224;000200104;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;32;1.244,80;Carla
+0101;20261209;000200105;000101;Parafuso M8;Ferragens;Obra Certa;PR;40;100,00;Carla
+0101;20261229;000200106;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;34;13.256,60;Bruno
+0101;20261227;000200107;000101;Parafuso M8;Ferragens;Casa & Obra;PR;27;67,50;Carla
+0101;20261228;000200108;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;14;5.458,60;Carla
+0101;20261228;000200109;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;14;5.458,60;Carla
+0101;20261229;000200110;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;23;8.967,70;Ana
+0101;20261229;000200111;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;21;6.279,00;Ana
+0101;20261205;000200112;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;7;2.729,30;Ana
+0101;20261209;000200113;000205;Tinta Acrílica 18L;Tintas;Obra Certa;PR;6;2.339,40;Bruno
+0101;20261218;000200114;000101;Parafuso M8;Ferragens;Casa & Obra;PR;27;67,50;Carla
+0101;20261221;000200115;000205;Tinta Acrílica 18L;Tintas;Construtora Alfa;SC;26;10.137,40;Carla
+0101;20261219;000200116;000101;Parafuso M8;Ferragens;Construtora Alfa;SC;13;32,50;Carla
+0101;20261223;000200117;000310;Furadeira 650W;Ferramentas;Casa & Obra;PR;8;2.392,00;Carla
+0101;20261226;000200118;000310;Furadeira 650W;Ferramentas;Obra Certa;PR;13;3.887,00;Ana
+0101;20261202;000200119;000420;Cimento 50kg;Básicos;Construtora Alfa;SC;2;77,80;Carla

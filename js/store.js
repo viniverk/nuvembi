@@ -64,18 +64,27 @@ async function createFirebaseStore(config) {
   const chunkCol = (orgId, id) => c('orgs', orgId, 'datasets', id, 'chunks');
   const now = () => new Date().toISOString();
 
-  async function writeDataset(orgId, ref, meta, rows, onProgress) {
+  // grava as linhas em blocos de uma "geração"; o painel só passa a usar a geração nova no fim
+  async function writeChunks(orgId, dsId, rows, gen, onProgress) {
     const chunks = chunkRows(rows);
     for (let i = 0; i < chunks.length; i++) {
-      await F.setDoc(d('orgs', orgId, 'datasets', ref.id, 'chunks', String(i).padStart(4, '0')), { index: i, data: JSON.stringify(chunks[i]) });
+      await F.setDoc(d('orgs', orgId, 'datasets', dsId, 'chunks', `${gen}_${String(i).padStart(4, '0')}`), { index: i, gen, data: JSON.stringify(chunks[i]) });
       onProgress && onProgress((i + 1) / chunks.length);
     }
-    await F.setDoc(ref, { ...meta, chunkCount: chunks.length });
+    return chunks.length;
+  }
+  async function writeDataset(orgId, ref, meta, rows, onProgress) {
+    const gen = token(6);
+    const n = await writeChunks(orgId, ref.id, rows, gen, onProgress);
+    await F.setDoc(ref, { ...meta, chunkCount: n, gen });
   }
 
-  async function loadChunks(orgId, id) {
-    const snap = await F.getDocs(F.query(chunkCol(orgId, id), F.orderBy('index')));
-    return snap.docs.flatMap(x => JSON.parse(x.data().data));
+  async function loadChunks(orgId, id, gen) {
+    const snap = await F.getDocs(chunkCol(orgId, id));
+    return snap.docs.map(x => x.data())
+      .filter(x => (x.gen || null) === (gen || null))   // painéis antigos não têm geração
+      .sort((a, b) => a.index - b.index)
+      .flatMap(x => JSON.parse(x.data));
   }
 
   return {
@@ -156,7 +165,18 @@ async function createFirebaseStore(config) {
       await writeDataset(org.id, ref, { ...meta, createdAt: now(), createdBy: me.email }, rows, onProgress);
       return ref.id;
     },
-    loadRows: id => loadChunks(org.id, id),
+    async loadRows(id) {
+      const m = await F.getDoc(dsDoc(id));
+      return loadChunks(org.id, id, m.exists() ? m.data().gen : null);
+    },
+    // troca as linhas mantendo painel, filtros e link (novos blocos -> aponta -> apaga os velhos)
+    async replaceData(id, metaPatch, rows, onProgress) {
+      const gen = token(6);
+      const n = await writeChunks(org.id, id, rows, gen, onProgress);
+      await F.updateDoc(dsDoc(id), { ...metaPatch, chunkCount: n, gen, updatedAt: now(), updatedBy: me.email });
+      const old = await F.getDocs(chunkCol(org.id, id));
+      await Promise.all(old.docs.filter(x => x.data().gen !== gen).map(x => F.deleteDoc(x.ref)));
+    },
     async updateDashboard(id, dashboard) { await F.updateDoc(dsDoc(id), { dashboard }); },
     async deleteDataset(id) {
       const ds = await F.getDoc(dsDoc(id));
@@ -184,7 +204,7 @@ async function createFirebaseStore(config) {
       const { orgId, datasetId } = s.data();
       const ds = await F.getDoc(d('orgs', orgId, 'datasets', datasetId));
       if (!ds.exists() || ds.data().shareId !== t) return null;
-      return { ds: { id: ds.id, ...ds.data() }, rows: await loadChunks(orgId, datasetId) };
+      return { ds: { id: ds.id, ...ds.data() }, rows: await loadChunks(orgId, datasetId, ds.data().gen) };
     },
 
     // ---------- migração do formato antigo (users/{uid}/datasets) ----------
@@ -328,6 +348,14 @@ function createLocalStore() {
       return id;
     },
     async loadRows(id) { return (await get(`rows:${org.id}:${id}`)) || []; },
+    async replaceData(id, metaPatch, rows, onProgress) {
+      await needEdit();
+      await set(`rows:${org.id}:${id}`, rows);
+      const list = (await get('datasets:' + org.id)) || [];
+      Object.assign(list.find(x => x.id === id), metaPatch, { updatedAt: now(), updatedBy: me.email });
+      await set('datasets:' + org.id, list);
+      onProgress && onProgress(1);
+    },
     async updateDashboard(id, dashboard) {
       await needEdit();
       const list = (await get('datasets:' + org.id)) || [];
