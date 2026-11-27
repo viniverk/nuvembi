@@ -14,7 +14,7 @@ SaaS de BI para pequenas e médias empresas: o cliente cria uma conta, importa p
 - Painel automático montado na importação (KPIs, barras, rosca, evolução mensal, tabela)
 - **Editor de painel** (botão "Editar painel"):
   - adicionar gráficos: Indicador, Colunas, Barras, Linha, Área, Pizza, Rosca, Tabela resumo, Tabela de dados
-  - renomear, trocar dimensão/medida/cálculo, Top N, ordenação e cor de cada gráfico
+  - renomear, trocar dimensão/medida/cálculo, Top N, ordenação, cor e rótulos de dados (valor, % ou ambos) de cada gráfico
   - arrastar pelo título para mudar a ordem e puxar o canto ◢ para mudar largura e altura
   - escolher quais filtros aparecem (colunas de texto, Ano e Mês)
   - duplicar e excluir gráficos

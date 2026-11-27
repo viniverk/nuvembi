@@ -30,6 +30,51 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const uid = () => 'w' + Math.random().toString(36).slice(2, 9);
 const clone = o => JSON.parse(JSON.stringify(o));
 
+// ---------------- rótulos de valores (plugin próprio do Chart.js) ----------------
+const LABELS = { none: 'Não mostrar', value: 'Valor', percent: 'Percentual', both: 'Valor e %' };
+const fmtLabel = v => Math.abs(v) >= 10000 ? nfc.format(v) : nf.format(v);
+const valueLabelsPlugin = {
+  id: 'valueLabels',
+  afterDatasetsDraw(chart) {
+    const o = chart.options.plugins.valueLabels;
+    if (!o || !o.mode || o.mode === 'none') return;
+    const { ctx } = chart;
+    const ds = chart.data.datasets[0];
+    const meta = chart.getDatasetMeta(0);
+    const total = ds.data.reduce((s, v) => s + (Number(v) || 0), 0);
+    const step = Math.max(1, Math.ceil(meta.data.length / 40)); // evita poluição em séries longas
+    ctx.save();
+    ctx.font = `600 11px Inter, system-ui, sans-serif`;
+    meta.data.forEach((el, i) => {
+      const v = ds.data[i];
+      if (v == null || (o.kind === 'line' && i % step)) return;
+      const pct = total ? v / total * 100 : 0;
+      if (o.kind === 'pie' && pct < 4) return; // fatias muito pequenas
+      const pctTxt = nf.format(Math.round(pct * 10) / 10) + '%';
+      const text = o.mode === 'percent' ? pctTxt : o.mode === 'both' ? `${fmtLabel(v)} (${pctTxt})` : fmtLabel(v);
+      let x, y;
+      if (o.kind === 'pie') {
+        ({ x, y } = el.tooltipPosition());
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(15,23,42,.55)'; ctx.fillStyle = '#fff';
+        ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
+        return;
+      }
+      ctx.fillStyle = '#334155';
+      if (o.kind === 'hbar') {
+        x = el.x + (v < 0 ? -6 : 6); y = el.y;
+        ctx.textAlign = v < 0 ? 'right' : 'left'; ctx.textBaseline = 'middle';
+      } else {
+        x = el.x; y = el.y + (v < 0 ? 6 : -6);
+        ctx.textAlign = 'center'; ctx.textBaseline = v < 0 ? 'top' : 'bottom';
+        if (o.kind === 'line') { y -= 2; ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.strokeText(text, x, y); }
+      }
+      ctx.fillText(text, x, y);
+    });
+    ctx.restore();
+  }
+};
+
 // ---------------- configuração inicial ----------------
 function distinct(rows, col, limit = 5000) {
   const set = new Set();
@@ -53,7 +98,7 @@ export function suggestConfig(ds, rows, pref = {}) {
     ...(dateCol ? ['__year'] : []),
     ...text.filter(c => c.name !== dim && !isCode(c)).filter(c => { const k = card(c); return k > 1 && k <= 200; }).slice(0, 4).map(c => c.name)
   ];
-  const w = (type, extra) => ({ id: uid(), type, title: '', dim, grain: 'month', measure, agg, top: 0, sort: 'desc', color: 0, w: 6, h: TYPES[type].h, ...extra });
+  const w = (type, extra) => ({ id: uid(), type, title: '', dim, grain: 'month', measure, agg, top: 0, sort: 'desc', color: 0, labels: 'none', w: 6, h: TYPES[type].h, ...extra });
   const widgets = [];
   if (measure !== '__count') {
     widgets.push(w('kpi', { w: 3 }));
@@ -63,7 +108,7 @@ export function suggestConfig(ds, rows, pref = {}) {
   widgets.push(w('kpi', { w: measure === '__count' ? 12 : 3, measure: '__count', agg: 'count', title: 'Quantidade de linhas' }));
   if (dim) {
     widgets.push(w('bar', { w: 8, top: 15 }));
-    widgets.push(w('doughnut', { w: 4, top: 5, color: 1 }));
+    widgets.push(w('doughnut', { w: 4, top: 5, color: 1, labels: 'percent' }));
   }
   if (dateCol) widgets.push(w('area', { w: 12, dim: dateCol, sort: 'label', color: 1 }));
   widgets.push(w('datatable', { w: 12, title: 'Dados' }));
@@ -300,11 +345,14 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       chart = new Chart(canvas, {
         type: w.type,
         data: { labels: g.labels, datasets: [{ data: g.values, backgroundColor: colors, borderColor: '#fff', borderWidth: 2 }] },
-        options: { maintainAspectRatio: false, onClick, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip } }
+        options: { maintainAspectRatio: false, onClick, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip, valueLabels: { mode: w.labels, kind: 'pie' } } },
+        plugins: [valueLabelsPlugin]
       });
     } else {
+      const showLabels = w.labels && w.labels !== 'none';
       chart = new Chart(canvas, {
         type: line ? 'line' : 'bar',
+        plugins: [valueLabelsPlugin],
         data: {
           labels: g.labels,
           datasets: [{
@@ -316,7 +364,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         options: {
           maintainAspectRatio: false, onClick,
           indexAxis: w.type === 'hbar' ? 'y' : 'x',
-          plugins: { legend: { display: false }, tooltip },
+          plugins: { legend: { display: false }, tooltip, valueLabels: { mode: w.labels, kind: w.type === 'hbar' ? 'hbar' : line ? 'line' : 'bar' } },
+          layout: { padding: !showLabels ? 0 : w.type === 'hbar' ? { right: w.labels === 'both' ? 90 : 50 } : line ? { top: 22, left: 12, right: 30 } : { top: 20 } },
           scales: { x: { grid: { display: w.type === 'hbar' }, ticks: { callback: tick } }, y: { grid: { color: '#eef2f7', display: w.type !== 'hbar' }, ticks: { callback: tick } } }
         }
       });
@@ -450,7 +499,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       id: uid(), type: 'bar', title: '',
       dim: textCols[0]?.name || dateCols[0]?.name || null, grain: 'month',
       measure: mainMeasure, agg: mainMeasure === '__count' ? 'count' : 'sum',
-      top: 10, sort: 'desc', color: 0, w: 6, h: TYPES.bar.h
+      top: 10, sort: 'desc', color: 0, labels: 'none', w: 6, h: TYPES.bar.h
     };
     const dimOpts = cols.filter(c => c.type !== 'number')
       .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : ''), c.name === base.dim)).join('');
@@ -472,6 +521,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         <label class="field" data-show="sort"><span>Ordenar por</span><select name="sort">
           ${opt('desc', 'Maior valor primeiro', base.sort === 'desc')}${opt('asc', 'Menor valor primeiro', base.sort === 'asc')}${opt('label', 'Nome / data (A→Z)', base.sort === 'label')}</select></label>
       </div>
+      <label class="field" data-show="labels"><span>Rótulos de dados</span><select name="labels">
+        ${Object.entries(LABELS).map(([k, v]) => opt(k, v, k === (base.labels || 'none'))).join('')}</select></label>
       <div class="field" data-show="color"><span>Cor</span><div class="swatches">${PALETTE.map((c, i) => `
         <label><input type="radio" name="color" value="${i}" ${i === (base.color || 0) ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>`;
 
@@ -480,7 +531,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       const w = {
         ...base, type: t, title: form.wtitle.value.trim(), dim: form.dim.value || null, grain: form.grain.value,
         measure: form.measure.value, agg: form.measure.value === '__count' ? 'count' : form.agg.value,
-        top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0)
+        top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value
       };
       if (isNew) { w.h = TYPES[t].h; w.w = t === 'kpi' ? 3 : t === 'datatable' ? 12 : 6; cfg.widgets.push(w); }
       else {
@@ -501,7 +552,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         agg: t !== 'datatable' && form.measure.value !== '__count',
         top: !['kpi', 'datatable'].includes(t),
         sort: !['kpi', 'datatable'].includes(t),
-        color: !['datatable', 'table'].includes(t)
+        color: !['datatable', 'table'].includes(t),
+        labels: !['kpi', 'datatable', 'table'].includes(t)
       };
       form.querySelectorAll('[data-show]').forEach(f => (f.hidden = !show[f.dataset.show]));
       const preview = {
