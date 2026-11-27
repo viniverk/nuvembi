@@ -1,11 +1,12 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=13';
-import { createStore, ROLES } from './store.js?v=13';
-import { readFile, normalizeRows } from './parser.js?v=13';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=13';
-import { buildModel } from './model.js?v=13';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=14';
+import { createStore, ROLES } from './store.js?v=14';
+import { readFile, normalizeRows } from './parser.js?v=14';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=14';
+import { buildModel } from './model.js?v=14';
+import { summarize, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=14';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -308,19 +309,20 @@ function openRefresh(ds) {
     if (!sheet) return;
     const mapped = mapColumns(sheet);
     const same = mapped.filter(c => c.matched), extra = mapped.filter(c => !c.matched);
-    const missing = ds.columns.filter(o => !mapped.some(c => c.name === o.name));
+    const missing = ds.columns.filter(o => !mapped.some(c => c.name === o.name) && !(ds.summary && o.name.startsWith(COUNT_FIELD)));
     const append = back.querySelector('input[name=rmode]:checked').value === 'append';
     const total = append ? ds.rowCount + sheet.data.length : sheet.data.length;
     summary.innerHTML = `
       ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="rsheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
       <div class="refresh-summary">
-        <div><strong>${nf.format(sheet.total || sheet.data.length)}</strong> linhas no arquivo → o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas
+        <div><strong>${nf.format(sheet.total || sheet.data.length)}</strong> linhas no arquivo → ${ds.summary ? 'serão resumidas como na importação' : `o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas`}
           ${append ? `<span class="muted">(${nf.format(ds.rowCount)} atuais + ${nf.format(sheet.data.length)} novas)</span>` : ''}</div>
         <div class="ok-text">✓ ${same.length} coluna(s) iguais às do painel</div>
-        ${extra.length ? `<div>+ ${extra.length} coluna(s) nova(s): ${extra.map(c => esc(c.name)).join(', ')}</div>` : ''}
+        ${extra.length ? (ds.summary ? `<div class="muted">Ignoradas no resumo: ${extra.map(c => esc(c.name)).join(', ')}</div>` : `<div>+ ${extra.length} coluna(s) nova(s): ${extra.map(c => esc(c.name)).join(', ')}</div>`) : ''}
         ${missing.length ? `<div class="warn-text">⚠ Não encontradas na planilha: ${missing.map(c => esc(c.name)).join(', ')}.${append ? ' As linhas novas ficam sem esses valores.' : ' Gráficos e filtros que usam essas colunas vão ficar vazios.'}</div>` : ''}
         ${!same.length ? '<div class="error">Nenhuma coluna bate com o painel — parece ser outra planilha.</div>' : ''}
-        ${total > MAX_ROWS ? `<div class="warn-text">⚠ Passa do limite de ${nf.format(MAX_ROWS)} linhas; o excedente fica de fora.</div>` : ''}
+        ${ds.summary ? `<div class="ok-text">Σ Este painel é resumido: o arquivo novo será resumido do mesmo jeito (${ds.summary.keep.length} campos${Object.values(ds.summary.grains || {}).includes('month') ? ', datas por mês' : ''}${ds.summary.from ? `, a partir de ${new Date(ds.summary.from + 'T12:00').toLocaleDateString('pt-BR')}` : ''}).</div>`
+          : total > MAX_ROWS ? `<div class="warn-text">⚠ Passa do limite de ${nf.format(MAX_ROWS)} linhas; o excedente fica de fora.</div>` : ''}
         ${append ? '<div class="muted small">Dica: o sistema não remove linhas repetidas. Se a planilha já tem os meses anteriores, use "Substituir".</div>' : ''}
       </div>`;
     summary.querySelector('#rsheet')?.addEventListener('change', e => { sheet = sheets[+e.target.value]; paint(); });
@@ -345,9 +347,17 @@ function openRefresh(ds) {
     const append = back.querySelector('input[name=rmode]:checked').value === 'append';
     const mapped = mapColumns(sheet);
     try {
-      go.textContent = 'Preparando…';
-      let rows = normalizeRows(mapped, sheet.data);
-      let columns = mapped.map(({ name, type }) => ({ name, type }));
+      go.textContent = ds.summary ? 'Resumindo…' : 'Preparando…';
+      await new Promise(r => setTimeout(r, 30));
+      let rows, columns;
+      if (ds.summary) {
+        const keep = ds.summary.keep.filter(n => mapped.some(c => c.name === n));
+        const r = summarize(sheet, mapped, { ...ds.summary, keep });
+        rows = r.rows; columns = r.columns;
+      } else {
+        rows = normalizeRows(mapped, sheet.data);
+        columns = mapped.map(({ name, type }) => ({ name, type }));
+      }
       if (append) {
         const old = rowsCache.get(ds.id)?.main || await store.loadRows(ds.id);
         rows = old.concat(rows);
@@ -590,8 +600,51 @@ async function handleFile(file) {
   const baseName = file.name.replace(/\.[^.]+$/, '');
   const source = /\.(csv|txt)$/i.test(file.name) ? 'csv' : /\.qvd$/i.test(file.name) ? 'qvd' : 'excel';
 
+  // configuração do resumo (para arquivos grandes)
+  let sumOn = false, sumKeep = null, sumGrains = {}, sumFrom = '', sumDateCol = null, sumResult = null, sumSig = '';
+  const sumSignature = () => JSON.stringify([sumKeep, sumGrains, sumFrom, sumDateCol, sheet.columns.map(c => c.type), sheet.name]);
+  const resetSum = () => {
+    sumKeep = sheet.columns.map(c => c.name);
+    const dates = sheet.columns.filter(c => c.type === 'date');
+    sumGrains = Object.fromEntries(dates.map(c => [c.name, 'month']));
+    sumDateCol = dates[0]?.name || null;
+    sumResult = null;
+  };
+  resetSum();
+  sumOn = (sheet.total || sheet.data.length) > MAX_ROWS;
+
+  const runSummary = () => {
+    const sig = sumSignature();
+    if (sumResult && sig === sumSig) return sumResult;
+    sumResult = summarize(sheet, sheet.columns, { keep: sumKeep, grains: sumGrains, from: sumFrom, dateCol: sumDateCol });
+    sumSig = sig;
+    return sumResult;
+  };
+
   const draw = () => {
-    const tooMany = sheet.data.length > MAX_ROWS;
+    const total = sheet.total || sheet.data.length;
+    const tooMany = total > MAX_ROWS;
+    const dateCols = sheet.columns.filter(c => c.type === 'date');
+    const sumBox = `
+      <details class="summary-box" ${sumOn || tooMany ? 'open' : ''}>
+        <summary><strong>Resumir dados antes de importar</strong> ${tooMany ? '<span class="tag warn-tag">recomendado: passa do limite</span>' : '<span class="muted">(opcional)</span>'}</summary>
+        <p class="muted small">Agrupa as linhas pelos campos de <strong>texto e data</strong> que você manter e <strong>soma os campos numéricos</strong>. A coluna <code>${COUNT_FIELD}</code> guarda quantas linhas originais cada linha resumida representa. Os totais ficam iguais; desmarque campos que não fazem sentido somar (preço unitário, por exemplo) e códigos muito detalhados (nº da nota, item) para resumir mais.</p>
+        <label class="check"><input type="checkbox" id="sum-on" ${sumOn ? 'checked' : ''}><span>Resumir este arquivo</span></label>
+        <div class="sum-grid" ${sumOn ? '' : 'hidden'}>
+          <div class="sum-cols">${sheet.columns.map(c => `
+            <label class="sum-col ${sumKeep.includes(c.name) ? '' : 'off'}">
+              <input type="checkbox" data-keep="${esc(c.name)}" ${sumKeep.includes(c.name) ? 'checked' : ''}>
+              <span>${esc(c.name)}</span><small class="muted">${c.type === 'number' ? 'soma' : c.type === 'date' ? 'data' : 'agrupa'}</small>
+              ${c.type === 'date' ? `<select data-grain="${esc(c.name)}">${Object.entries(SUM_GRAINS).map(([k, v]) => `<option value="${k}" ${k === (sumGrains[c.name] || 'day') ? 'selected' : ''}>por ${v.toLowerCase()}</option>`).join('')}</select>` : ''}
+            </label>`).join('')}</div>
+          ${dateCols.length ? `<div class="inline-form">
+            <span class="muted small">Importar só a partir de</span>
+            <input type="date" id="sum-from" value="${esc(sumFrom)}" style="flex:0 0 170px">
+            ${dateCols.length > 1 ? `<select id="sum-datecol">${dateCols.map(c => `<option ${c.name === sumDateCol ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : `<span class="muted small">(${esc(sumDateCol)})</span>`}
+          </div>` : ''}
+          <div class="inline-form"><button class="btn ghost small" id="sum-calc">Calcular prévia do resumo</button><span id="sum-out" class="small"></span></div>
+        </div>
+      </details>`;
     preview.innerHTML = `
       <div class="card">
         <div class="preview-head">
@@ -599,7 +652,7 @@ async function handleFile(file) {
           ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="sheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         </div>
         <p class="muted">${nf.format(sheet.total || sheet.data.length)} linhas · ${sheet.columns.length} colunas${sheet.total ? ' · arquivo QVD do Qlik' : ''}. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
-        ${tooMany ? `<p class="error">Este MVP aceita até ${nf.format(MAX_ROWS)} linhas${sheet.total ? ` (o QVD tem ${nf.format(sheet.total)})` : ''}. Só as primeiras serão importadas.</p>` : ''}
+        ${tooMany && !sumOn ? `<p class="error">Este plano aceita até ${nf.format(MAX_ROWS)} linhas por painel e o arquivo tem ${nf.format(total)}. Resuma os dados abaixo para usar o arquivo inteiro — sem resumir, só as primeiras ${nf.format(MAX_ROWS)} linhas serão importadas.</p>` : ''}
         <div class="table-wrap"><table>
           <thead>
             <tr>${sheet.columns.map(c => `<th>${esc(c.name)}</th>`).join('')}</tr>
@@ -607,13 +660,35 @@ async function handleFile(file) {
           </thead>
           <tbody>${sheet.data.slice(0, 8).map(r => `<tr>${sheet.columns.map(c => `<td>${esc(r[c.index] instanceof Date ? r[c.index].toLocaleDateString('pt-BR') : r[c.index])}</td>`).join('')}</tr>`).join('')}</tbody>
         </table></div>
+        ${sumBox}
         <div class="row-end"><span class="muted" id="progress"></span><button class="btn" id="btn-save">Criar painel</button></div>
       </div>`;
 
-    preview.querySelector('#sheet')?.addEventListener('change', e => { sheet = sheets[+e.target.value]; draw(); });
+    const out = preview.querySelector('#sum-out');
+    const showResult = r => {
+      const ok = r.rows.length <= MAX_ROWS;
+      out.innerHTML = `${nf.format(r.used)} linhas${r.used < r.read ? ` (de ${nf.format(r.read)}, filtradas pela data)` : ''} → <strong class="${ok ? 'ok-text' : 'error'}">${nf.format(r.rows.length)} linhas resumidas</strong>${ok ? '' : ` — ainda passa de ${nf.format(MAX_ROWS)}: desmarque campos detalhados ou agrupe as datas por mês`}`;
+    };
+    const calc = () => new Promise(res => {
+      out.textContent = 'Resumindo… arquivos grandes levam alguns segundos.';
+      setTimeout(() => { try { const r = runSummary(); showResult(r); res(r); } catch (err) { console.error(err); out.innerHTML = '<span class="error">Não foi possível resumir.</span>'; res(null); } }, 30);
+    });
+    preview.querySelector('#sum-on').addEventListener('change', e => { sumOn = e.target.checked; draw(); });
+    preview.querySelectorAll('[data-keep]').forEach(cb => cb.addEventListener('change', () => {
+      sumKeep = cb.checked ? [...new Set([...sumKeep, cb.dataset.keep])] : sumKeep.filter(n => n !== cb.dataset.keep);
+      cb.closest('.sum-col').classList.toggle('off', !cb.checked); out.textContent = '';
+    }));
+    preview.querySelectorAll('[data-grain]').forEach(sel => sel.addEventListener('change', () => { sumGrains[sel.dataset.grain] = sel.value; out.textContent = ''; }));
+    preview.querySelector('#sum-from')?.addEventListener('change', e => { sumFrom = e.target.value; out.textContent = ''; });
+    preview.querySelector('#sum-datecol')?.addEventListener('change', e => { sumDateCol = e.target.value; out.textContent = ''; });
+    preview.querySelector('#sum-calc')?.addEventListener('click', calc);
+    if (sumResult && sumSig === sumSignature()) showResult(sumResult);
+
+    preview.querySelector('#sheet')?.addEventListener('change', e => { sheet = sheets[+e.target.value]; resetSum(); sumOn = (sheet.total || sheet.data.length) > MAX_ROWS; draw(); });
     preview.querySelectorAll('[data-col]').forEach(s => s.addEventListener('change', () => {
       sheet.columns[+s.dataset.col].type = s.value;
       s.className = `type-${s.value}`;
+      if (sumOn) draw();   // o tipo muda o que é somado e o que agrupa
     }));
     preview.querySelector('#btn-save').addEventListener('click', async e => {
       const btn = e.currentTarget;
@@ -622,9 +697,20 @@ async function handleFile(file) {
       const prog = preview.querySelector('#progress');
       prog.textContent = 'Preparando dados…';
       try {
-        const rows = normalizeRows(sheet.columns, sheet.data.slice(0, MAX_ROWS));
-        const columns = sheet.columns.map(({ name, type }) => ({ name, type }));
+        let rows, columns, summary = null;
+        if (sumOn) {
+          if (!sumKeep.length) throw Object.assign(new Error('Escolha pelo menos um campo para manter.'), { user: true });
+          const r = await calc();
+          if (!r) throw new Error('resumo');
+          if (r.rows.length > MAX_ROWS) throw Object.assign(new Error(`O resumo ainda tem ${nf.format(r.rows.length)} linhas. Desmarque campos detalhados ou agrupe as datas por mês.`), { user: true });
+          rows = r.rows; columns = r.columns;
+          summary = { keep: sumKeep, grains: sumGrains, from: sumFrom, dateCol: sumDateCol, sourceRows: r.read };
+        } else {
+          rows = normalizeRows(sheet.columns, sheet.data.slice(0, MAX_ROWS));
+          columns = sheet.columns.map(({ name, type }) => ({ name, type }));
+        }
         const meta = { name, source, columns, rowCount: rows.length };
+        if (summary) meta.summary = summary;
         meta.dashboard = suggestConfig(meta, rows);
         const id = await store.saveDataset(meta, rows, p => (prog.textContent = `Enviando… ${Math.round(p * 100)}%`));
         rowsCache.set(id, { main: rows });
@@ -633,7 +719,7 @@ async function handleFile(file) {
       } catch (err) {
         console.error(err);
         prog.textContent = '';
-        toast('Erro ao salvar. Verifique sua conexão e as regras do Firestore.', 'err');
+        toast(err.user ? err.message : 'Erro ao salvar. Verifique sua conexão e as regras do Firestore.', 'err');
         btn.disabled = false;
       }
     });

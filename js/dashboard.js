@@ -6,8 +6,8 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=13';
-import { buildModel } from './model.js?v=13';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=14';
+import { buildModel } from './model.js?v=14';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
@@ -116,7 +116,11 @@ export function suggestConfig(ds, rows, pref = {}) {
     widgets.push(w('kpi', { w: 3, agg: 'avg' }));
     widgets.push(w('kpi', { w: 3, agg: 'max' }));
   }
-  widgets.push(w('kpi', { w: measure === '__count' ? 12 : 3, measure: '__count', agg: 'count', title: 'Quantidade de linhas' }));
+  // painel resumido na importação: a quantidade real de registros está em Qtd_Registros
+  const countCol = nums.find(c => c.name.startsWith('Qtd_Registros'));
+  widgets.push(countCol
+    ? w('kpi', { w: 3, measure: countCol.name, agg: 'sum', format: 'integer', title: 'Registros' })
+    : w('kpi', { w: measure === '__count' ? 12 : 3, measure: '__count', agg: 'count', title: 'Quantidade de linhas' }));
   if (dim) {
     widgets.push(w('bar', { w: 8, top: 15 }));
     widgets.push(w('doughnut', { w: 4, top: 5, color: 1 }));

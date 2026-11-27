@@ -10,7 +10,7 @@
 const DATE_HINT = /(^|_)(data|dt|emis|emissao|venc|vencto|vencimento|dtdigit|entrega)|data|^dt/i;
 const CODE_HINT = /(^|_)(cod|codigo|id|cnpj|cpf|cep|filial|fil|nota|doc|nf|serie|pedido|num|loja|tel|fone)(_|$)/i;
 
-import { parseQVD } from './qvd.js?v=13';
+import { parseQVD } from './qvd.js?v=14';
 
 // ---------- leitura do arquivo ----------
 export async function readFile(file, { maxRows = Infinity } = {}) {
@@ -22,7 +22,7 @@ export async function readFile(file, { maxRows = Infinity } = {}) {
   if (name.endsWith('.qvd')) {
     const q = parseQVD(buf, { maxRows });
     const t = buildTable([q.header, ...q.rows]);
-    return [{ name: q.name, ...t, total: q.total }];
+    return [{ name: q.name, ...t, total: q.total, qvd: buf }];
   }
 
   if (name.endsWith('.csv') || name.endsWith('.txt')) {
@@ -150,20 +150,17 @@ export function toISODate(v, allowCompact = false) {
 }
 
 // ---------- normalização final (usa os tipos escolhidos) ----------
+export function normalizeValue(type, v) {
+  if (typeof v === 'string') v = v.trim();
+  if (v === '' || v === undefined || v === null) return null;
+  if (type === 'number') { v = toNumber(v); return Number.isNaN(v) ? null : v; }
+  if (type === 'date') return toISODate(v, true);
+  return v instanceof Date ? toISODate(v) : String(v);
+}
 export function normalizeRows(columns, data) {
   return data.map(arr => {
     const row = {};
-    for (const col of columns) {
-      let v = arr[col.index];
-      if (typeof v === 'string') v = v.trim();
-      if (v === '' || v === undefined) v = null;
-      if (v !== null) {
-        if (col.type === 'number') { v = toNumber(v); if (Number.isNaN(v)) v = null; }
-        else if (col.type === 'date') v = toISODate(v, true);
-        else v = v instanceof Date ? toISODate(v) : String(v);
-      }
-      row[col.name] = v;
-    }
+    for (const col of columns) row[col.name] = normalizeValue(col.type, arr[col.index]);
     return row;
   });
 }

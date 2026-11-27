@@ -82,7 +82,8 @@ function readSymbols(bytes, view, start, length, count, numType) {
 }
 
 // devolve { name, header: [campos], rows: [[...]], total }
-export function parseQVD(buffer, { maxRows = Infinity } = {}) {
+// com onRow(linha) percorre o arquivo inteiro sem guardar as linhas (para resumir arquivos grandes)
+export function parseQVD(buffer, { maxRows = Infinity, onRow = null } = {}) {
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
   const h = parseHeader(bytes);
@@ -90,7 +91,7 @@ export function parseQVD(buffer, { maxRows = Infinity } = {}) {
   const n = Math.min(h.records, maxRows);
   const base = h.dataStart + h.offset;
   const rs = h.recordSize;
-  const rows = new Array(n);
+  const rows = onRow ? [] : new Array(n);
   const plan = h.fields.map((f, i) => ({
     sym: symbols[i], bias: f.bias, width: f.bitWidth,
     byte: f.bitOffset >> 3, shift: f.bitOffset & 7,
@@ -112,7 +113,7 @@ export function parseQVD(buffer, { maxRows = Infinity } = {}) {
       }
       row[i] = idx < 0 ? null : (f.sym[idx] ?? null);   // bias negativo = valor nulo
     }
-    rows[r] = row;
+    if (onRow) onRow(row); else rows[r] = row;
   }
   return { name: h.tableName, header: h.fields.map(f => f.name), rows, total: h.records };
 }
