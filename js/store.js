@@ -65,10 +65,11 @@ async function createFirebaseStore(config) {
   const now = () => new Date().toISOString();
 
   // grava as linhas em blocos de uma "geração"; o painel só passa a usar a geração nova no fim
-  async function writeChunks(orgId, dsId, rows, gen, onProgress) {
+  async function writeChunks(orgId, dsId, rows, gen, onProgress, table = 'main') {
     const chunks = chunkRows(rows);
     for (let i = 0; i < chunks.length; i++) {
-      await F.setDoc(d('orgs', orgId, 'datasets', dsId, 'chunks', `${gen}_${String(i).padStart(4, '0')}`), { index: i, gen, data: JSON.stringify(chunks[i]) });
+      const cid = `${table === 'main' ? '' : table + '_'}${gen}_${String(i).padStart(4, '0')}`;
+      await F.setDoc(d('orgs', orgId, 'datasets', dsId, 'chunks', cid), { index: i, gen, table, data: JSON.stringify(chunks[i]) });
       onProgress && onProgress((i + 1) / chunks.length);
     }
     return chunks.length;
@@ -79,12 +80,25 @@ async function createFirebaseStore(config) {
     await F.setDoc(ref, { ...meta, chunkCount: n, gen });
   }
 
+  const tableOf = x => x.table || 'main';
+  const pick = (docs, table, gen) => docs
+    .filter(x => tableOf(x) === table && (x.gen || null) === (gen || null))   // painéis antigos não têm geração
+    .sort((a, b) => a.index - b.index)
+    .flatMap(x => JSON.parse(x.data));
   async function loadChunks(orgId, id, gen) {
     const snap = await F.getDocs(chunkCol(orgId, id));
-    return snap.docs.map(x => x.data())
-      .filter(x => (x.gen || null) === (gen || null))   // painéis antigos não têm geração
-      .sort((a, b) => a.index - b.index)
-      .flatMap(x => JSON.parse(x.data));
+    return pick(snap.docs.map(x => x.data()), 'main', gen);
+  }
+  // todas as tabelas do painel: { main: [...], <id>: [...] }
+  async function loadAllChunks(orgId, id, meta) {
+    const docs = (await F.getDocs(chunkCol(orgId, id))).docs.map(x => x.data());
+    const out = { main: pick(docs, 'main', meta.gen) };
+    for (const t of meta.tables || []) out[t.id] = pick(docs, t.id, t.gen);
+    return out;
+  }
+  async function deleteChunks(orgId, id, keep) {
+    const old = await F.getDocs(chunkCol(orgId, id));
+    await Promise.all(old.docs.filter(x => !keep(x.data())).map(x => F.deleteDoc(x.ref)));
   }
 
   return {
@@ -182,8 +196,36 @@ async function createFirebaseStore(config) {
       const gen = token(6);
       const n = await writeChunks(org.id, id, rows, gen, onProgress);
       await F.updateDoc(dsDoc(id), { ...metaPatch, chunkCount: n, gen, updatedAt: now(), updatedBy: me.email });
-      const old = await F.getDocs(chunkCol(org.id, id));
-      await Promise.all(old.docs.filter(x => x.data().gen !== gen).map(x => F.deleteDoc(x.ref)));
+      await deleteChunks(org.id, id, x => tableOf(x) !== 'main' || x.gen === gen);
+    },
+    async loadAll(id) {
+      const m = await F.getDoc(dsDoc(id));
+      return loadAllChunks(org.id, id, m.exists() ? m.data() : {});
+    },
+    // ---------- tabelas extras (modelo com várias tabelas) ----------
+    async addTable(dsId, { name, columns }, rows, onProgress) {
+      const tid = 't' + token(7), gen = token(6);
+      const n = await writeChunks(org.id, dsId, rows, gen, onProgress, tid);
+      const meta = (await F.getDoc(dsDoc(dsId))).data();
+      const tables = [...(meta.tables || []), { id: tid, name, columns, rowCount: rows.length, gen, chunkCount: n, addedAt: now(), addedBy: me.email }];
+      await F.updateDoc(dsDoc(dsId), { tables, updatedAt: now(), updatedBy: me.email });
+      return tables;
+    },
+    async replaceTable(dsId, tid, { name, columns }, rows, onProgress) {
+      const gen = token(6);
+      const n = await writeChunks(org.id, dsId, rows, gen, onProgress, tid);
+      const meta = (await F.getDoc(dsDoc(dsId))).data();
+      const tables = (meta.tables || []).map(t => t.id === tid ? { ...t, name: name || t.name, columns, rowCount: rows.length, gen, chunkCount: n, updatedAt: now() } : t);
+      await F.updateDoc(dsDoc(dsId), { tables, updatedAt: now(), updatedBy: me.email });
+      await deleteChunks(org.id, dsId, x => tableOf(x) !== tid || x.gen === gen);
+      return tables;
+    },
+    async removeTable(dsId, tid) {
+      const meta = (await F.getDoc(dsDoc(dsId))).data();
+      const tables = (meta.tables || []).filter(t => t.id !== tid);
+      await F.updateDoc(dsDoc(dsId), { tables, updatedAt: now(), updatedBy: me.email });
+      await deleteChunks(org.id, dsId, x => tableOf(x) !== tid);
+      return tables;
     },
     async updateDashboard(id, dashboard) { await F.updateDoc(dsDoc(id), { dashboard }); },
     async deleteDataset(id) {
@@ -212,7 +254,7 @@ async function createFirebaseStore(config) {
       const { orgId, datasetId } = s.data();
       const ds = await F.getDoc(d('orgs', orgId, 'datasets', datasetId));
       if (!ds.exists() || ds.data().shareId !== t) return null;
-      return { ds: { id: ds.id, ...ds.data() }, rows: await loadChunks(orgId, datasetId, ds.data().gen) };
+      return { ds: { id: ds.id, ...ds.data() }, data: await loadAllChunks(orgId, datasetId, ds.data()) };
     },
 
     // ---------- migração do formato antigo (users/{uid}/datasets) ----------
@@ -360,6 +402,40 @@ function createLocalStore() {
       return id;
     },
     async loadRows(id) { return (await get(`rows:${org.id}:${id}`)) || []; },
+    async loadAll(id) {
+      const ds = ((await get('datasets:' + org.id)) || []).find(x => x.id === id) || {};
+      const out = { main: (await get(`rows:${org.id}:${id}`)) || [] };
+      for (const t of ds.tables || []) out[t.id] = (await get(`rows:${org.id}:${id}:${t.id}`)) || [];
+      return out;
+    },
+    async addTable(dsId, { name, columns }, rows, onProgress) {
+      await needEdit();
+      const tid = 't' + token(7);
+      await set(`rows:${org.id}:${dsId}:${tid}`, rows);
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === dsId);
+      ds.tables = [...(ds.tables || []), { id: tid, name, columns, rowCount: rows.length, addedAt: now(), addedBy: me.email }];
+      await set('datasets:' + org.id, list); onProgress && onProgress(1);
+      return ds.tables;
+    },
+    async replaceTable(dsId, tid, { name, columns }, rows, onProgress) {
+      await needEdit();
+      await set(`rows:${org.id}:${dsId}:${tid}`, rows);
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === dsId);
+      ds.tables = (ds.tables || []).map(t => t.id === tid ? { ...t, name: name || t.name, columns, rowCount: rows.length, updatedAt: now() } : t);
+      await set('datasets:' + org.id, list); onProgress && onProgress(1);
+      return ds.tables;
+    },
+    async removeTable(dsId, tid) {
+      await needEdit();
+      await del(`rows:${org.id}:${dsId}:${tid}`);
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === dsId);
+      ds.tables = (ds.tables || []).filter(t => t.id !== tid);
+      await set('datasets:' + org.id, list);
+      return ds.tables;
+    },
     async replaceData(id, metaPatch, rows, onProgress) {
       await needEdit();
       await set(`rows:${org.id}:${id}`, rows);
@@ -380,6 +456,7 @@ function createLocalStore() {
       const ds = list.find(x => x.id === id);
       if (ds?.shareId) { const s = await getMap('shares'); delete s[ds.shareId]; await set('shares', s); }
       await del(`rows:${org.id}:${id}`);
+      for (const t of ds?.tables || []) await del(`rows:${org.id}:${id}:${t.id}`);
       await set('datasets:' + org.id, list.filter(x => x.id !== id));
     },
 
@@ -402,7 +479,9 @@ function createLocalStore() {
       if (!s) return null;
       const ds = ((await get('datasets:' + s.orgId)) || []).find(x => x.id === s.datasetId);
       if (!ds || ds.shareId !== t) return null;
-      return { ds, rows: (await get(`rows:${s.orgId}:${s.datasetId}`)) || [] };
+      const data = { main: (await get(`rows:${s.orgId}:${s.datasetId}`)) || [] };
+      for (const t of ds.tables || []) data[t.id] = (await get(`rows:${s.orgId}:${s.datasetId}:${t.id}`)) || [];
+      return { ds, data };
     },
 
     async needsMigration() {

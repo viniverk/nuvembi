@@ -6,7 +6,8 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=11';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=12';
+import { buildModel } from './model.js?v=12';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
@@ -194,18 +195,23 @@ function aggregate(rows, keyFn, w) {
   if (master) {
     const c = compiledOf(master);
     const groups = new Map();
-    for (const r of rows) { const k = keyFn(r); if (k === null) continue; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
+    for (const r of rows) {
+      const ks = keyFn(r);
+      for (const k of (Array.isArray(ks) ? ks : [ks])) { if (k === null) continue; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
+    }
     return [...groups].map(([k, arr]) => [k, c.error ? null : c.fn(arr)]);
   }
   const m = new Map();
   for (const r of rows) {
-    const k = keyFn(r);
-    if (k === null) continue;
-    let a = m.get(k);
-    if (!a) { a = { sum: 0, n: 0, cnt: 0, min: Infinity, max: -Infinity }; m.set(k, a); }
-    a.cnt++;
+    const ks = keyFn(r);
     const v = w.measure === '__count' ? 1 : r[w.measure];
-    if (typeof v === 'number') { a.sum += v; a.n++; if (v < a.min) a.min = v; if (v > a.max) a.max = v; }
+    for (const k of (Array.isArray(ks) ? ks : [ks])) {
+      if (k === null) continue;
+      let a = m.get(k);
+      if (!a) { a = { sum: 0, n: 0, cnt: 0, min: Infinity, max: -Infinity }; m.set(k, a); }
+      a.cnt++;
+      if (typeof v === 'number') { a.sum += v; a.n++; if (v < a.min) a.min = v; if (v > a.max) a.max = v; }
+    }
   }
   const val = a => {
     if (w.measure === '__count' || w.agg === 'count') return a.cnt;
@@ -248,18 +254,20 @@ function periodWindow(ref, period, compare) {
 function autoTitle(w, ds) {
   if (w.type === 'datatable') return 'Dados';
   if (w.type === 'kpi') return measureLabel(w);
-  const dimCol = ds.columns.find(c => c.name === w.dim);
+  const dimCol = (COLUMNS.length ? COLUMNS : ds.columns).find(c => c.name === w.dim);
   const by = dimCol?.type === 'date' ? `${w.dim} (${GRAINS[w.grain || 'month'].toLowerCase()})` : w.dim;
   return `${measureLabel(w)} por ${by || '—'}`;
 }
 
 // agrupa, ordena e limita os dados de um gráfico
-function groupData(rows, w, ds) {
-  const dimCol = ds.columns.find(c => c.name === w.dim);
+function groupData(rows, w, dimCol, valuesOf) {
   if (!dimCol) return { labels: [], keys: [], values: [], isDate: false };
   const isDate = dimCol.type === 'date';
   const grain = w.grain || 'month';
-  let g = aggregate(rows, isDate ? r => dateKey(r[w.dim], grain) : r => r[w.dim] ?? '(vazio)', w);
+  valuesOf = valuesOf || (r => [r[w.dim]]);
+  let g = aggregate(rows, isDate
+    ? r => valuesOf(r).map(v => dateKey(v, grain))
+    : r => { const vs = valuesOf(r); return vs.length ? vs.map(v => v ?? '(vazio)') : ['(sem ligação)']; }, w);
   const sort = w.sort || (isDate ? 'label' : 'desc');
   if (sort === 'label') g.sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'pt-BR', { numeric: true }));
   else g.sort((a, b) => sort === 'asc' ? a[1] - b[1] : b[1] - a[1]);
@@ -278,14 +286,17 @@ function groupData(rows, w, ds) {
 }
 
 // ---------------- montagem do painel ----------------
-export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
+export function mountDashboard(el, ds, data, savedCfg, onSave) {
+  const model = buildModel(ds, data);
+  const allRows = model.byId.main.rows;
   let saved = normalizeConfig(savedCfg, ds, allRows);
   let cfg = clone(saved);
   let editing = false;
   let dirty = false;
   const charts = new Map();
 
-  const cols = ds.columns;
+  const cols = model.fields;                       // campos de todas as tabelas
+  const tableHint = c => model.multi ? ` · ${c.tables.map(id => model.byId[id].name).join(', ')}` : '';
   const textCols = cols.filter(c => c.type === 'text');
   const dateCols = cols.filter(c => c.type === 'date');
   const numCols = cols.filter(c => c.type === 'number');
@@ -300,9 +311,9 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   const fieldLabel = c => c === '__year' ? 'Ano' : c === '__month' ? 'Mês' : c;
   const valueLabel = (c, v) => c === '__month' ? (MONTHS_FULL[+v - 1] || v) : v;
   function allValues(c) {
-    if (c === '__year') return [...new Set(allRows.map(r => (r[cfg.dateCol] || '').slice(0, 4)).filter(Boolean))].sort();
+    if (c === '__year') return [...new Set([...model.distinctValues(cfg.dateCol)].map(d => (d || '').slice(0, 4)).filter(Boolean))].sort();
     if (c === '__month') return MONTHS_FULL.map((_, i) => String(i + 1).padStart(2, '0'));
-    return [...distinct(allRows, c, allRows.length)].map(v => String(v ?? '(vazio)')).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+    return [...model.distinctValues(c)].map(v => String(v ?? '(vazio)')).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
   }
   function setFilters(next) {
     next = normFilters(next);
@@ -364,7 +375,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     MASTERS = cfg.masters; COLUMNS = cols;
     charts.forEach(c => c.destroy());
     charts.clear();
-    const rows = applyFilters(allRows, cfg, cfg.dateCol);
+    const state = model.select(cfg.filters, cfg.dateCol);
+    const rows = state.main;
 
     // ----- barra superior -----
     const toolbar = editing ? `
@@ -405,7 +417,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
           <button data-sel="clear" title="Limpar todas as seleções" ${selEntries.length ? '' : 'disabled'}>⌫</button>
         </div>
         <div class="sel-items">${selChips || '<span class="sel-empty">Nenhuma seleção — clique nos gráficos ou use os filtros</span>'}</div>
-        <span class="rowcount">${nf.format(rows.length)} de ${nf.format(allRows.length)} linhas</span>
+        <span class="rowcount" title="${model.multi ? esc(model.tables.map(t => `${t.name}: ${nf.format(state[t.id].length)} de ${nf.format(t.rows.length)}`).join(' · ')) : ''}">${nf.format(rows.length)} de ${nf.format(allRows.length)} linhas${model.multi ? ` · ${model.tables.length} tabelas` : ''}</span>
       </div>`;
 
     // ----- filtros (lista com seleção múltipla) -----
@@ -431,7 +443,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
 
     layout();
     const dateless = { filters: Object.fromEntries(Object.entries(cfg.filters).filter(([k]) => k !== '__year' && k !== '__month')) };
-    const ctx = { rowsNoDate: applyFilters(allRows, dateless, cfg.dateCol) };
+    const ctx = { state, stateNoDate: model.select(dateless.filters, cfg.dateCol) };
     cfg.widgets.forEach(w => fillWidget(w, rows, ctx));
     bindEvents();
   }
@@ -519,7 +531,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     if (bg) bg.style.backgroundSize = `${m.colW}px ${ROW * 4}px`;
   }
 
-  function fillWidget(w, rows, ctx) {
+  function fillWidget(w, rows, ctx) {  // rows: linhas da tabela principal; trocadas pela tabela da medida abaixo
     const body = el.querySelector(`.widget[data-id="${w.id}"] .w-body`);
     if (!body) return;
     const color = PALETTE[w.color || 0] || PALETTE[0];
@@ -529,23 +541,52 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       return;
     }
 
+    if (w.type === 'datatable') {
+      const t = model.byId[w.table] || model.byId.main;
+      const tRows = ctx.state[t.id];
+      body.innerHTML = `<div class="table-wrap fill"><table>
+        <thead><tr>${t.columns.map(c => `<th class="${c.type}">${esc(c.name)}</th>`).join('')}</tr></thead>
+        <tbody>${tRows.slice(0, 200).map(r => `<tr>${t.columns.map(c => `<td class="${c.type}">${esc(fmtCell(r[c.name], c.type))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>${tRows.length > 200 ? `<div class="muted small">Mostrando 200 de ${nf.format(tRows.length)} linhas. Use "Exportar CSV" para ver tudo.</div>` : ''}`;
+      return;
+    }
+
+    // em qual tabela a medida é calculada (a que tem todos os campos dela)
+    const used = master ? compiledOf(master).fields : (w.measure === '__count' ? [] : [w.measure]);
+    const mt = model.measureTable(used, w.type === 'kpi' ? null : w.dim);
+    const gone = used.filter(f => !model.tablesOf(f).length);
+    if (gone.length) {
+      body.innerHTML = `<div class="muted center small">O campo ${esc(gone.join(', '))} não existe mais neste painel (a tabela pode ter sido removida). Edite o gráfico e escolha outra medida.</div>`;
+      return;
+    }
+    if (!mt) {
+      const where = used.map(f => `${f} (${model.tablesOf(f).map(id => model.byId[id].name).join('/') || '?'})`).join(', ');
+      body.innerHTML = `<div class="muted center small">A medida usa campos de tabelas diferentes: ${esc(where)}. Monte a fórmula com campos de uma tabela só.</div>`;
+      return;
+    }
+    rows = ctx.state[mt.id];
+    const rowsNoDate = ctx.stateNoDate[mt.id];
+
     if (w.type === 'kpi') {
       const dcol = cfg.dateCol;
-      const period = dcol ? (w.period || 'all') : 'all';
+      const period = dcol && model.pathTo(mt.id, dcol) ? (w.period || 'all') : 'all';
+      const dateIn = st => { const f = model.resolver(st, mt.id, dcol); return r => f(r)[0]; };
       let v, sub = '';
       if (period === 'all') {
         v = valueOf(rows, w);
       } else {
         // data de referência = a mais recente nas linhas filtradas
         let ref = '';
-        for (const r of rows) { const d = r[dcol]; if (d && d > ref) ref = d; }
+        const dNow = dateIn(ctx.state);
+        for (const r of rows) { const d = dNow(r); if (d && d > ref) ref = d; }
+        const dAll = dateIn(ctx.stateNoDate);
         if (!ref) { body.innerHTML = '<div class="muted center small">Sem datas no filtro atual.</div>'; return; }
         const cur = periodWindow(ref, period);
-        v = valueOf(ctx.rowsNoDate.filter(r => cur.test(r[dcol])), w);
+        v = valueOf(rowsNoDate.filter(r => cur.test(dAll(r))), w);
         sub = `<div class="kpi-period">${esc(cur.label)}</div>`;
         if (w.compare && w.compare !== 'none') {
           const prev = periodWindow(ref, period, w.compare);
-          const pv = valueOf(ctx.rowsNoDate.filter(r => prev.test(r[dcol])), w);
+          const pv = valueOf(rowsNoDate.filter(r => prev.test(dAll(r))), w);
           const delta = (pv === null || v === null || pv === 0) ? null : (v - pv) / Math.abs(pv);
           const cls = delta === null ? '' : delta >= 0 ? 'up' : 'down';
           const deltaTxt = delta === null ? '—' : `${delta >= 0 ? '▲' : '▼'} ${formatValue(Math.abs(delta), 'percent')}`;
@@ -555,14 +596,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       body.innerHTML = `<div class="kpi-val" style="color:${color}" title="${esc(fv(w, v))}">${esc(fv(w, v, true))}</div>${sub}`;
       return;
     }
-    if (w.type === 'datatable') {
-      body.innerHTML = `<div class="table-wrap fill"><table>
-        <thead><tr>${cols.map(c => `<th class="${c.type}">${esc(c.name)}</th>`).join('')}</tr></thead>
-        <tbody>${rows.slice(0, 200).map(r => `<tr>${cols.map(c => `<td class="${c.type}">${esc(fmtCell(r[c.name], c.type))}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table></div>${rows.length > 200 ? `<div class="muted small">Mostrando 200 de ${nf.format(rows.length)} linhas. Use "Exportar CSV" para ver tudo.</div>` : ''}`;
-      return;
-    }
-    const g = groupData(rows, w, ds);
+    const dimCol = cols.find(c => c.name === w.dim);
+    const g = groupData(rows, w, dimCol, dimCol ? model.resolver(ctx.state, mt.id, w.dim) : null);
     if (!g.values.length) { body.innerHTML = '<div class="muted center">Sem dados para este filtro.</div>'; return; }
 
     if (w.type === 'table') {
@@ -693,7 +728,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         saved = clone(cfg); editing = false; dirty = false; resetUndo(); draw();
       } catch { btn.disabled = false; }
     });
-    act('export', () => exportCSV(ds, applyFilters(allRows, cfg, cfg.dateCol)));
+    act('export', () => exportCSV({ name: ds.name, columns: model.byId.main.columns }, model.select(cfg.filters, cfg.dateCol).main));
     el.querySelectorAll('[data-sel]').forEach(b => b.addEventListener('click', () => {
       const a = b.dataset.sel;
       if (a === 'clear') return setFilters({});
@@ -810,7 +845,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       top: 10, sort: 'desc', color: 0
     };
     const dimOpts = cols.filter(c => c.type !== 'number')
-      .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : ''), c.name === base.dim)).join('');
+      .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : '') + tableHint(c), c.name === base.dim)).join('');
     const body = `
       <div class="type-picker">${Object.entries(TYPES).map(([k, t]) => `
         <label class="type-opt"><input type="radio" name="type" value="${k}" ${k === base.type ? 'checked' : ''}>
@@ -824,7 +859,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
           ${cfg.masters.length ? `<optgroup label="Itens mestres">${cfg.masters.map(m => opt('m:' + m.id, 'ƒ ' + m.name, base.measure === 'm:' + m.id)).join('')}</optgroup>` : ''}
           <optgroup label="Campos">
           ${opt('__count', 'Quantidade de linhas', base.measure === '__count')}
-          ${numCols.map(c => opt(c.name, c.name, c.name === base.measure)).join('')}</optgroup></select></label>
+          ${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup></select></label>
+        ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || 'main'))).join('')}</select></label>` : ''}
         <label class="field" data-show="agg"><span>Cálculo</span><select name="agg">${Object.entries(AGG).map(([k, v]) => opt(k, v, k === base.agg)).join('')}</select></label>
         <label class="field" data-show="top"><span>Mostrar</span><select name="top">
           ${[[0, 'Todos os itens'], [5, 'Top 5'], [10, 'Top 10'], [15, 'Top 15'], [20, 'Top 20'], [30, 'Top 30'], [50, 'Top 50']].map(([v, l]) => opt(v, l, +base.top === v)).join('')}</select></label>
@@ -848,7 +884,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         ...base, type: t, title: form.wtitle.value.trim(), dim: form.dim.value || null, grain: form.grain.value,
         measure: form.measure.value, agg: form.measure.value === '__count' ? 'count' : form.agg.value,
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
-        format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value
+        format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
+        table: form.wtable ? form.wtable.value : 'main'
       };
       if (isNew) {
         w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
@@ -874,6 +911,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         measure: t !== 'datatable',
         agg: t !== 'datatable' && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
         format: t !== 'datatable',
+        table: t === 'datatable',
         period: t === 'kpi' && !!cfg.dateCol,
         compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
         top: !['kpi', 'datatable'].includes(t),
@@ -936,7 +974,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       <label class="field"><span>Fórmula</span><textarea name="mexpr" rows="3" spellcheck="false">${esc(m.expr)}</textarea></label>
       <div class="expr-status" data-status></div>
       <div class="expr-help">
-        <div><small class="muted">Campos — clique para inserir</small><div class="chips">${cols.map(c => `<button type="button" class="chip-btn ${c.type}" data-ins="[${esc(c.name)}]">${esc(c.name)}</button>`).join('')}</div></div>
+        ${model.tables.map(t => `<div><small class="muted">${model.multi ? `Campos de ${esc(t.name)}` : 'Campos'} — clique para inserir</small><div class="chips">${t.columns.map(c => `<button type="button" class="chip-btn ${c.type}" data-ins="[${esc(c.name)}]">${esc(c.name)}</button>`).join('')}</div></div>`).join('')}
+        ${model.multi ? '<small class="muted">Use campos de uma tabela só em cada fórmula (campos-chave valem para todas as tabelas em que aparecem).</small>' : ''}
         <div><small class="muted">Funções</small><div class="chips">${FUNCTIONS_HELP.map(([f, d]) => `<button type="button" class="chip-btn fn" data-ins="${esc(f.replace('[Campo]', '').replace('()', '(').replace('(Distinct )', '(Distinct '))}" title="${esc(d)}">${esc(f)}</button>`).join('')}
           <button type="button" class="chip-btn op" data-ins=" / ">÷</button><button type="button" class="chip-btn op" data-ins=" * ">×</button><button type="button" class="chip-btn op" data-ins=" - ">−</button><button type="button" class="chip-btn op" data-ins=" + ">+</button></div></div>
         <details><summary>Exemplos</summary><ul class="small">
@@ -950,7 +989,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     const modal = openModal(existing ? 'Editar item mestre' : 'Novo item mestre', body, 'Salvar', form => {
       const c = compile(form.mexpr.value, cols);
       const name = form.mname.value.trim();
-      if (c.error || !name) return false;
+      if (c.error || !name || !model.measureTable(c.fields, null)) return false;
       Object.assign(m, { name, expr: form.mexpr.value.trim(), format: form.mformat.value });
       if (existing) cfg.masters[cfg.masters.findIndex(x => x.id === m.id)] = m; else cfg.masters.push(m);
       markDirty(); draw(); setTimeout(manageMasters, 0);
@@ -958,10 +997,12 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     const form = modal.querySelector('form');
     const status = modal.querySelector('[data-status]');
     const check = () => {
-      const c = compile(form.mexpr.value, cols);
-      const rowsNow = applyFilters(allRows, cfg, cfg.dateCol);
+      let c = compile(form.mexpr.value, cols);
+      const mt = !c.error && model.measureTable(c.fields, null);
+      if (!c.error && !mt) c = { error: 'A fórmula mistura campos de tabelas diferentes. Use campos de uma tabela só.' };
+      const rowsNow = mt ? model.select(cfg.filters, cfg.dateCol)[mt.id] : [];
       status.className = 'expr-status ' + (c.error ? 'bad' : 'ok');
-      status.textContent = c.error ? '⚠ ' + c.error : `✓ Fórmula válida — com os filtros atuais dá ${formatValue(c.fn(rowsNow), form.mformat.value)}`;
+      status.textContent = c.error ? '⚠ ' + c.error : `✓ Fórmula válida${model.multi ? ` (tabela ${mt.name})` : ''} — com os filtros atuais dá ${formatValue(c.fn(rowsNow), form.mformat.value)}`;
       form.querySelector('button[type=submit]').disabled = !!c.error || !form.mname.value.trim();
     };
     modal.querySelectorAll('[data-ins]').forEach(b => b.addEventListener('click', () => {
@@ -992,8 +1033,8 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
         <div class="check-list">${item('__year', 'Ano')}${item('__month', 'Mês')}</div>` : ''}
       <h4>Colunas</h4>
       <div class="check-list">${textCols.map(c => {
-        const k = distinct(allRows, c.name, allRows.length).size;
-        return item(c.name, c.name, `<small class="muted">${nf.format(k)} valores${k > 500 ? ' · mostra os 500 primeiros' : ''}</small>`);
+        const k = model.distinctValues(c.name).size;
+        return item(c.name, c.name, `<small class="muted">${nf.format(k)} valores${k > 500 ? ' · mostra os 500 primeiros' : ''}${esc(tableHint(c))}</small>`);
       }).join('') || '<span class="muted">Nenhuma coluna de texto.</span>'}</div>`;
 
     openModal('Filtros do painel', body, 'Aplicar', form => {

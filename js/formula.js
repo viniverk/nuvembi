@@ -55,7 +55,7 @@ function tokenize(src) {
 }
 
 // AST: {t:'num',v} {t:'field',name} {t:'neg',a} {t:'bin',op,a,b} {t:'agg',fn,arg}
-function parse(src, columns) {
+function parse(src, columns, used = new Set()) {
   const toks = tokenize(src);
   let p = 0;
   const peek = () => toks[p];
@@ -63,6 +63,7 @@ function parse(src, columns) {
   const colByName = name => {
     const c = columns.find(x => x.name.toLowerCase() === name.toLowerCase());
     if (!c) throw new Error(`Campo "${name}" não existe neste painel.`);
+    used.add(c.name);
     return c.name;
   };
 
@@ -177,9 +178,10 @@ export function compile(expr, columns) {
   if (cache.has(key)) return cache.get(key);
   let out;
   try {
-    const ast = parse(String(expr || ''), columns);
+    const used = new Set();
+    const ast = parse(String(expr || ''), columns, used);
     if (ast.t !== 'agg' && !JSON.stringify(ast).includes('"agg"')) throw new Error('A fórmula precisa de pelo menos uma agregação, por exemplo Sum([Valor]).');
-    out = { fn: topFn(ast), additive: additive(ast) };
+    out = { fn: topFn(ast), additive: additive(ast), fields: [...used] };
   } catch (e) {
     out = { error: e.message };
   }

@@ -1,10 +1,11 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=11';
-import { createStore, ROLES } from './store.js?v=11';
-import { readFile, normalizeRows } from './parser.js?v=11';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=11';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=12';
+import { createStore, ROLES } from './store.js?v=12';
+import { readFile, normalizeRows } from './parser.js?v=12';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=12';
+import { buildModel } from './model.js?v=12';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -251,7 +252,7 @@ async function showHome() {
       <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : 'XLS'}</span>
         <div><h3>${esc(d.name)}</h3><small>${new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</small></div>
         ${d.shareId ? '<span class="badge ok shared-badge" title="Tem link público ativo">🔗 Link ativo</span>' : ''}</div>
-      <p class="muted">${nf.format(d.rowCount)} linhas · ${d.columns.length} colunas${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
+      <p class="muted">${nf.format(d.rowCount)} linhas · ${d.columns.length} colunas${d.tables?.length ? ` · ${d.tables.length + 1} tabelas` : ''}${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
       <div class="tags">${d.columns.slice(0, 5).map(c => `<span class="tag ${c.type}">${esc(c.name)}</span>`).join('')}${d.columns.length > 5 ? `<span class="tag">+${d.columns.length - 5}</span>` : ''}</div>
       <div class="ds-actions">
         <a class="btn small" href="#/painel/${encodeURIComponent(d.id)}">Abrir painel</a>
@@ -348,19 +349,208 @@ function openRefresh(ds) {
       let rows = normalizeRows(mapped, sheet.data);
       let columns = mapped.map(({ name, type }) => ({ name, type }));
       if (append) {
-        const old = rowsCache.get(ds.id) || await store.loadRows(ds.id);
+        const old = rowsCache.get(ds.id)?.main || await store.loadRows(ds.id);
         rows = old.concat(rows);
         columns = [...ds.columns, ...columns.filter(c => !ds.columns.some(o => o.name === c.name))];
       }
       rows = rows.slice(0, MAX_ROWS);
       await store.replaceData(ds.id, { columns, rowCount: rows.length }, rows, p => (go.textContent = `Enviando… ${Math.round(p * 100)}%`));
-      rowsCache.set(ds.id, rows);
+      rowsCache.delete(ds.id);
       close();
       toast(`Dados atualizados: ${nf.format(rows.length)} linhas.`);
       if (location.hash === `#/painel/${encodeURIComponent(ds.id)}`) showDashboard(ds.id); else location.hash = `#/painel/${encodeURIComponent(ds.id)}`;
     } catch (err) {
       console.error(err); toast('Não foi possível atualizar os dados.', 'err');
       go.disabled = false; go.textContent = 'Atualizar painel';
+    }
+  });
+}
+
+// ---------------- Modelo de dados (várias tabelas) ----------------
+function modelSvg(model) {
+  // layout em estrela: principal à esquerda, demais tabelas empilhadas à direita (linhas não se cruzam)
+  const W = 230, GAPX = 150, GAPY = 28, HEAD = 40, ROWH = 21, MAXF = 12;
+  const keys = new Set(model.keys);
+  const boxes = model.tables.map(t => {
+    const shown = [...t.columns].sort((a, b) => (keys.has(b.name) - keys.has(a.name))).slice(0, MAXF);
+    const h = HEAD + shown.length * ROWH + (t.columns.length > MAXF ? ROWH : 0) + 10;
+    return { t, shown, h };
+  });
+  const [main, ...rest] = boxes;
+  const restH = rest.reduce((s, b) => s + b.h + GAPY, 0) - GAPY;
+  const height = 20 + Math.max(main.h, restH);
+  main.x = 10; main.y = 10 + Math.max(0, (height - 20 - main.h) / 2);
+  let yy = 10 + Math.max(0, (height - 20 - restH) / 2);
+  rest.forEach(b => { b.x = 10 + W + GAPX; b.y = yy; yy += b.h + GAPY; });
+  const width = 20 + (rest.length ? 2 * W + GAPX : W) + 70;   // margem para ligações entre tabelas da direita
+  const fieldY = (b, f) => { const i = b.shown.findIndex(c => c.name === f); return b.y + HEAD + (i < 0 ? 0 : i) * ROWH + ROWH / 2 + 2; };
+  // ligações: cada tabela com a chave se liga à primeira tabela que também tem a chave
+  let lines = '';
+  for (const k of model.keys) {
+    const bs = boxes.filter(b => b.t.columns.some(c => c.name === k));
+    for (let i = 1; i < bs.length; i++) {
+      const a = bs[0], b = bs[i];   // bs[0] é a principal quando ela tem a chave
+      const aRight = a.x < b.x, sameCol = a.x === b.x;
+      const x1 = sameCol ? a.x + W : (aRight ? a.x + W : a.x), x2 = sameCol ? b.x + W : (aRight ? b.x : b.x + W);
+      const y1 = fieldY(a, k), y2 = fieldY(b, k);
+      const mx = sameCol ? x1 + 55 : (x1 + x2) / 2;
+      lines += `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" class="mlink"/>`;
+    }
+  }
+  const boxSvg = boxes.map(b => `
+    <g>
+      <rect x="${b.x}" y="${b.y}" width="${W}" height="${b.h}" rx="10" class="mbox ${b.t.id === 'main' ? 'main' : ''}"/>
+      <rect x="${b.x}" y="${b.y}" width="${W}" height="${HEAD - 6}" rx="10" class="mhead ${b.t.id === 'main' ? 'main' : ''}"/>
+      <rect x="${b.x}" y="${b.y + HEAD - 16}" width="${W}" height="10" class="mhead ${b.t.id === 'main' ? 'main' : ''}"/>
+      <text x="${b.x + 12}" y="${b.y + 22}" class="mtitle">${esc(b.t.name.length > 22 ? b.t.name.slice(0, 21) + '…' : b.t.name)}</text>
+      <text x="${b.x + W - 12}" y="${b.y + 22}" text-anchor="end" class="mcount">${nf.format(b.t.rows.length)}</text>
+      ${b.shown.map((c, i) => `<text x="${b.x + 14}" y="${b.y + HEAD + i * ROWH + 14}" class="mfield ${keys.has(c.name) ? 'key' : ''}">${keys.has(c.name) ? '🔑 ' : ''}${esc(c.name.length > 26 ? c.name.slice(0, 25) + '…' : c.name)}</text>`).join('')}
+      ${b.t.columns.length > MAXF ? `<text x="${b.x + 14}" y="${b.y + HEAD + MAXF * ROWH + 14}" class="mmore">+ ${b.t.columns.length - MAXF} campos</text>` : ''}
+    </g>`).join('');
+  return `<svg class="model-svg" viewBox="0 0 ${width} ${height}" style="max-width:${width}px">${lines}${boxSvg}</svg>`;
+}
+
+function openModel(ds, data) {
+  const model = buildModel(ds, data);
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  const linksOf = t => model.keys.filter(k => t.columns.some(c => c.name === k));
+  back.innerHTML = `
+    <div class="modal card modal-wide">
+      <header><h2>Modelo de dados</h2><button class="x" data-close>×</button></header>
+      <div class="modal-body">
+        <p class="muted">As tabelas se ligam pelos <strong>campos com o mesmo nome</strong> (🔑), como no Qlik. Selecionar um valor em uma tabela filtra as outras pelas ligações, e um gráfico pode juntar campos de tabelas ligadas.</p>
+        <div class="model-wrap">${modelSvg(model)}</div>
+        <div class="table-list">${model.tables.map(t => `
+          <div class="tl-item">
+            <div><strong>${esc(t.name)}</strong> ${t.id === 'main' ? '<span class="tag">principal</span>' : ''}
+              <small class="muted">${nf.format(t.rows.length)} linhas · ${t.columns.length} campos · ${linksOf(t).length ? 'liga por ' + linksOf(t).map(esc).join(', ') : '<span class="warn-text">sem ligação</span>'}</small></div>
+            ${canEdit() && t.id !== 'main' ? `<div class="row-actions"><button class="btn ghost small" data-tupd="${t.id}">⟳ Atualizar</button><button class="btn ghost small danger" data-tdel="${t.id}">Remover</button></div>` : ''}
+          </div>`).join('')}</div>
+        ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar tabela</button>' : ''}
+      </div>
+    </div>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+  back.querySelector('#btn-addtable')?.addEventListener('click', () => { close(); openAddTable(ds, data); });
+  back.querySelectorAll('[data-tupd]').forEach(b => b.addEventListener('click', () => { close(); openAddTable(ds, data, (ds.tables || []).find(t => t.id === b.dataset.tupd)); }));
+  back.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', async () => {
+    const t = ds.tables.find(x => x.id === b.dataset.tdel);
+    if (!confirm(`Remover a tabela "${t.name}" deste painel? Gráficos que usam campos dela vão ficar vazios.`)) return;
+    try {
+      ds.tables = await store.removeTable(ds.id, t.id);
+      rowsCache.delete(ds.id); close(); toast('Tabela removida.'); showDashboard(ds.id);
+    } catch (err) { console.error(err); toast('Não foi possível remover a tabela.', 'err'); }
+  }));
+}
+
+// adicionar uma tabela ao painel (ou atualizar uma tabela extra existente)
+function openAddTable(ds, data, existing = null) {
+  const others = buildModel({ ...ds, tables: (ds.tables || []).filter(t => !existing || t.id !== existing.id) }, data);
+  const fieldsElsewhere = others.fields; // campos das outras tabelas (para ligar)
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <div class="modal card modal-wide">
+      <header><h2>${existing ? `Atualizar tabela "${esc(existing.name)}"` : 'Adicionar tabela ao painel'}</h2><button class="x" data-close>×</button></header>
+      <div class="modal-body">
+        <p class="muted">${existing ? 'Envie a planilha nova desta tabela. Os nomes dos campos são mantidos quando batem.' : 'Ex.: Metas por vendedor, cadastro de Vendedores ou de Produtos.'} Campos com o <strong>mesmo nome</strong> de um campo de outra tabela viram ligação 🔗 — renomeie aqui para ligar ou desligar.</p>
+        <label class="drop small-drop"><input type="file" id="tfile" accept=".xlsx,.xls,.xlsm,.csv,.txt" hidden><strong>Escolher planilha</strong><span class="muted">Excel ou CSV</span></label>
+        <div id="tbody"></div>
+      </div>
+      <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="tgo" disabled>${existing ? 'Atualizar tabela' : 'Adicionar tabela'}</button></footer>
+    </div>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+  const body = back.querySelector('#tbody'), go = back.querySelector('#tgo');
+  let sheets = null, sheet = null, cols = [];
+
+  const findField = name => fieldsElsewhere.find(f => f.name.toLowerCase() === name.trim().toLowerCase());
+  const tableNames = f => f.tables.map(id => others.byId[id].name).join(', ');
+
+  const setSheet = sh => {
+    sheet = sh;
+    cols = sh.columns.map(c => {
+      const prev = existing?.columns.find(o => o.name.toLowerCase() === c.name.toLowerCase());
+      const ef = findField(c.name);
+      return { index: c.index, orig: c.name, name: prev ? prev.name : ef ? ef.name : c.name, type: prev ? prev.type : ef ? ef.type : c.type };
+    });
+    paint();
+  };
+  const status = () => {
+    const names = cols.map(c => c.name.trim());
+    const dup = names.filter((n, i) => n && names.indexOf(n) !== i);
+    const links = cols.map(c => ({ c, f: findField(c.name) })).filter(x => x.f);
+    const perTable = {};
+    links.forEach(({ f }) => f.tables.forEach(id => (perTable[id] = (perTable[id] || 0) + 1)));
+    const multi = Object.entries(perTable).filter(([, n]) => n > 1).map(([id]) => others.byId[id].name);
+    return { dup, links, multi, empty: names.some(n => !n) };
+  };
+  const paint = () => {
+    if (!sheet) return;
+    const st = status();
+    const defaultName = existing ? existing.name : (sheets.length > 1 ? sheet.name : back.querySelector('.small-drop strong').textContent.replace(/\.[^.]+$/, ''));
+    const curName = body.querySelector('#tname')?.value ?? defaultName;
+    body.innerHTML = `
+      <div class="preview-head">
+        <label class="field grow"><span>Nome da tabela</span><input id="tname" value="${esc(curName)}" maxlength="40"></label>
+        ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="tsheet">${sheets.map((s2, i) => `<option value="${i}" ${s2 === sheet ? 'selected' : ''}>${esc(s2.name)}</option>`).join('')}</select></label>` : ''}
+      </div>
+      <p class="muted small">${nf.format(sheet.data.length)} linhas · ${cols.length} campos</p>
+      <div class="table-wrap"><table class="map-table">
+        <thead><tr><th>Coluna na planilha</th><th>Nome do campo</th><th>Tipo</th><th>Ligação</th></tr></thead>
+        <tbody>${cols.map((c, i) => {
+          const f = findField(c.name);
+          return `<tr>
+            <td class="muted">${esc(c.orig)}</td>
+            <td><input data-cname="${i}" value="${esc(c.name)}"></td>
+            <td><select data-ctype="${i}">${Object.entries({ text: 'Texto', number: 'Número', date: 'Data' }).map(([k, v]) => `<option value="${k}" ${k === c.type ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
+            <td>${f ? `<span class="link-ok">🔗 liga com ${esc(tableNames(f))}</span>` : '<span class="muted">—</span>'}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      <div class="refresh-summary">
+        ${st.links.length ? `<div class="ok-text">🔗 Liga ao modelo por: ${st.links.map(x => esc(x.f.name)).join(', ')}</div>` : '<div class="warn-text">⚠ Nenhum campo com o mesmo nome de outra tabela: esta tabela vai ficar solta (as seleções não a filtram). Renomeie a coluna-chave para o nome usado no painel, por exemplo "Vendedor".</div>'}
+        ${st.multi.length ? `<div class="warn-text">⚠ Liga com ${esc(st.multi.join(', '))} por mais de um campo. Isso pode gerar resultados inesperados (no Qlik vira "chave sintética"). Prefira um campo-chave só: renomeie os outros.</div>` : ''}
+        ${st.dup.length ? `<div class="error">Nomes repetidos: ${esc([...new Set(st.dup)].join(', '))}</div>` : ''}
+        ${st.empty ? '<div class="error">Todo campo precisa de um nome.</div>' : ''}
+      </div>`;
+    body.querySelector('#tsheet')?.addEventListener('change', e => setSheet(sheets[+e.target.value]));
+    body.querySelectorAll('[data-cname]').forEach(inp => inp.addEventListener('change', () => { cols[+inp.dataset.cname].name = inp.value; const f = findField(inp.value); if (f) cols[+inp.dataset.cname].type = f.type; paint(); }));
+    body.querySelectorAll('[data-ctype]').forEach(sel => sel.addEventListener('change', () => (cols[+sel.dataset.ctype].type = sel.value)));
+    go.disabled = !!(st.dup.length || st.empty);
+  };
+  back.querySelector('#tfile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    body.innerHTML = `<div class="muted">Lendo ${esc(file.name)}…</div>`;
+    try { sheets = await readFile(file); } catch (err) { console.error(err); body.innerHTML = '<div class="error">Não consegui ler este arquivo.</div>'; return; }
+    if (!sheets.length) { body.innerHTML = '<div class="error">O arquivo está vazio.</div>'; return; }
+    back.querySelector('.small-drop strong').textContent = file.name;
+    setSheet(sheets[0]);
+  });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    const name = (body.querySelector('#tname').value || 'Tabela').trim();
+    // nomes que batem com campos de outras tabelas usam a grafia exata (para ligar)
+    const final = cols.map(c => { const f = findField(c.name); return { index: c.index, name: f ? f.name : c.name.trim(), type: c.type }; });
+    try {
+      const rows = normalizeRows(final, sheet.data.slice(0, MAX_ROWS));
+      const columns = final.map(({ name: n, type }) => ({ name: n, type }));
+      const prog = p => (go.textContent = `Enviando… ${Math.round(p * 100)}%`);
+      ds.tables = existing ? await store.replaceTable(ds.id, existing.id, { name, columns }, rows, prog)
+                           : await store.addTable(ds.id, { name, columns }, rows, prog);
+      rowsCache.delete(ds.id);
+      close();
+      toast(existing ? `Tabela "${name}" atualizada.` : `Tabela "${name}" adicionada ao painel.`);
+      showDashboard(ds.id);
+    } catch (err) {
+      console.error(err); toast('Não foi possível salvar a tabela.', 'err');
+      go.disabled = false; go.textContent = existing ? 'Atualizar tabela' : 'Adicionar tabela';
     }
   });
 }
@@ -437,7 +627,7 @@ async function handleFile(file) {
         const meta = { name, source, columns, rowCount: rows.length };
         meta.dashboard = suggestConfig(meta, rows);
         const id = await store.saveDataset(meta, rows, p => (prog.textContent = `Enviando… ${Math.round(p * 100)}%`));
-        rowsCache.set(id, rows);
+        rowsCache.set(id, { main: rows });
         toast('Painel criado!');
         location.hash = `#/painel/${encodeURIComponent(id)}`;
       } catch (err) {
@@ -454,19 +644,20 @@ async function handleFile(file) {
 // ---------------- Painel ----------------
 async function showDashboard(id) {
   const view = shell('home', 'Carregando painel…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost" href="#/">← Voltar</a>${canEdit() ? '<button class="btn ghost" id="btn-refresh">⟳ Atualizar dados</button><button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
+    `<a class="btn ghost" href="#/">← Voltar</a><button class="btn ghost" id="btn-model">🗂 Modelo de dados</button>${canEdit() ? '<button class="btn ghost" id="btn-refresh">⟳ Atualizar dados</button><button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
   let ds, rows;
   try {
     const list = await store.listDatasets();
     ds = list.find(d => d.id === id);
     if (!ds) { view.innerHTML = `<div class="card error">Painel não encontrado.</div>`; return; }
-    rows = rowsCache.get(id) || await store.loadRows(id);
+    rows = rowsCache.get(id) || await store.loadAll(id);   // { main: [...], <tabela>: [...] }
     rowsCache.set(id, rows);
   } catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o painel.</div>`; return; }
 
   document.querySelector('.topbar h1').textContent = ds.name;
   document.getElementById('btn-share')?.addEventListener('click', () => openShare(ds));
   document.getElementById('btn-refresh')?.addEventListener('click', () => openRefresh(ds));
+  document.getElementById('btn-model').addEventListener('click', () => openModel(ds, rows));
   mountDashboard(view, ds, rows, ds.dashboard, canEdit() ? async cfg => {
     try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; toast('Painel salvo.'); }
     catch (e) { console.error(e); toast('Erro ao salvar o painel.', 'err'); throw e; }
@@ -543,7 +734,7 @@ async function showPublic(t) {
       </header>
       <main class="main" id="view"></main>
     </div>`;
-  mountDashboard(document.getElementById('view'), data.ds, data.rows, data.ds.dashboard, null);
+  mountDashboard(document.getElementById('view'), data.ds, data.data, data.ds.dashboard, null);
 }
 
 // ---------------- Equipe ----------------
