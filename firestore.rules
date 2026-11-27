@@ -1,9 +1,76 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Cada usuário só enxerga e altera os próprios dados
+
+    function signedIn() { return request.auth != null; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function memberDoc(org) { return /databases/$(database)/documents/orgs/$(org)/members/$(request.auth.uid); }
+    function isMember(org) { return signedIn() && exists(memberDoc(org)); }
+    function roleIn(org) { return get(memberDoc(org)).data.role; }
+    function canEdit(org) { return isMember(org) && roleIn(org) in ['admin', 'editor']; }
+    function isAdmin(org) { return isMember(org) && roleIn(org) == 'admin'; }
+    function validRole(r) { return r in ['admin', 'editor', 'viewer']; }
+    function dsPath(org, ds) { return /databases/$(database)/documents/orgs/$(org)/datasets/$(ds); }
+    function isShared(org, ds) { return get(dsPath(org, ds)).data.get('shareId', null) != null; }
+
+    // Índice das empresas do usuário + formato antigo (users/{uid}/datasets)
     match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /orgs/{org} {
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isMember(org);
+      allow update: if isAdmin(org) && request.resource.data.ownerUid == resource.data.ownerUid;
+
+      match /members/{uid} {
+        allow read: if isMember(org);
+        // 1) o criador da empresa entra como admin  2) quem tem convite entra com o papel do convite  3) admin adiciona
+        allow create: if validRole(request.resource.data.role) && (
+          isAdmin(org)
+          || (signedIn() && uid == request.auth.uid && request.resource.data.role == 'admin'
+              && get(/databases/$(database)/documents/orgs/$(org)).data.ownerUid == request.auth.uid)
+          || (signedIn() && uid == request.auth.uid
+              && exists(/databases/$(database)/documents/invites/$(myEmail() + '__' + org))
+              && get(/databases/$(database)/documents/invites/$(myEmail() + '__' + org)).data.role == request.resource.data.role)
+        );
+        allow update: if isAdmin(org) && validRole(request.resource.data.role);
+        // admin remove alguém; qualquer um pode sair da empresa
+        allow delete: if isAdmin(org) || (signedIn() && uid == request.auth.uid);
+      }
+
+      match /datasets/{ds} {
+        allow read: if isMember(org) || resource.data.get('shareId', null) != null;
+        allow create, update, delete: if canEdit(org);
+
+        match /chunks/{chunk} {
+          allow read: if isMember(org) || isShared(org, ds);
+          allow write: if canEdit(org);
+        }
+      }
+    }
+
+    // Convites: o convidado vê e recusa o seu; o admin da empresa cria, lista e cancela
+    match /invites/{id} {
+      allow read: if signedIn() && (resource.data.email == myEmail() || isAdmin(resource.data.orgId));
+      allow create: if isAdmin(request.resource.data.orgId)
+        && validRole(request.resource.data.role)
+        && id == request.resource.data.email + '__' + request.resource.data.orgId;
+      // reenviar convite para o mesmo e-mail (troca o papel)
+      allow update: if isAdmin(resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.email == resource.data.email
+        && validRole(request.resource.data.role);
+      allow delete: if signedIn() && (resource.data.email == myEmail() || isAdmin(resource.data.orgId));
+    }
+
+    // Links públicos: quem tem o link abre (get), ninguém lista
+    match /shares/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if canEdit(request.resource.data.orgId);
+      allow delete: if canEdit(resource.data.orgId);
+      allow update: if false;
     }
   }
 }

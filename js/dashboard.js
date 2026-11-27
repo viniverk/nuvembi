@@ -333,7 +333,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       <div class="dash-toolbar">
         <div class="spacer"></div>
         <button class="btn ghost" data-act="export">Exportar CSV</button>
-        <button class="btn" data-act="edit">✎ Editar painel</button>
+        ${onSave ? '<button class="btn" data-act="edit">✎ Editar painel</button>' : ''}
       </div>`;
 
     // ----- barra de seleções atuais -----

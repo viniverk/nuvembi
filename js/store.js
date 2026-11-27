@@ -1,14 +1,24 @@
 // =============================================================
-//  Camada de dados
-//  - FirebaseStore: Auth (e-mail/senha) + Firestore
-//      users/{uid}/datasets/{id}            -> metadados + painel
-//      users/{uid}/datasets/{id}/chunks/{n} -> linhas em blocos
-//  - LocalStore: modo demo, tudo no IndexedDB do navegador
-//  As duas têm exatamente os mesmos métodos.
+//  Camada de dados — empresas (workspaces), usuários, convites,
+//  painéis e links de compartilhamento.
+//
+//  Firestore:
+//    orgs/{org}                         { name, ownerUid, createdAt }
+//    orgs/{org}/members/{uid}           { email, role: admin|editor|viewer, addedAt }
+//    orgs/{org}/datasets/{id}           metadados + painel (+ shareId quando compartilhado)
+//    orgs/{org}/datasets/{id}/chunks/n  linhas em blocos
+//    invites/{email__org}               { email, orgId, orgName, role, invitedBy, createdAt }
+//    shares/{token}                     { orgId, datasetId, name, createdBy, createdAt }
+//    users/{uid}                        { orgs: { orgId: name } }  (índice das empresas do usuário)
+//    users/{uid}/datasets/...           formato antigo (migrado na 1ª entrada)
+//
+//  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
 const FB = '10.12.2';
-const CHUNK_BYTES = 700_000; // Firestore aceita até ~1 MB por documento
+const CHUNK_BYTES = 700_000;
+export const ROLES = { admin: 'Administrador', editor: 'Editor', viewer: 'Visualizador' };
+const ORG_KEY = 'nuvembi_org';
 
 export async function createStore(config) {
   return config && config.apiKey ? createFirebaseStore(config) : createLocalStore();
@@ -25,8 +35,18 @@ function chunkRows(rows) {
   if (cur.length) chunks.push(cur);
   return chunks;
 }
+const token = (n = 22) => {
+  const a = new Uint8Array(n); crypto.getRandomValues(a);
+  return [...a].map(b => 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 56]).join('');
+};
+const lower = e => String(e || '').trim().toLowerCase();
+const inviteId = (email, orgId) => `${lower(email)}__${orgId}`;
+const getSavedOrg = () => { try { return localStorage.getItem(ORG_KEY); } catch { return null; } };
+const setSavedOrg = id => { try { localStorage.setItem(ORG_KEY, id); } catch {} };
 
-// ---------------- Firebase ----------------
+// =============================================================
+//  Firebase
+// =============================================================
 async function createFirebaseStore(config) {
   const appMod = await import(`https://www.gstatic.com/firebasejs/${FB}/firebase-app.js`);
   const A = await import(`https://www.gstatic.com/firebasejs/${FB}/firebase-auth.js`);
@@ -34,62 +54,172 @@ async function createFirebaseStore(config) {
   const app = appMod.initializeApp(config);
   const auth = A.getAuth(app);
   const db = F.getFirestore(app);
-  let current = null;
+  let me = null;      // { uid, email }
+  let org = null;     // { id, name, role }
 
-  const dsCol = () => F.collection(db, 'users', current.uid, 'datasets');
-  const dsDoc = id => F.doc(db, 'users', current.uid, 'datasets', id);
-  const chunkCol = id => F.collection(db, 'users', current.uid, 'datasets', id, 'chunks');
+  const d = (...p) => F.doc(db, ...p);
+  const c = (...p) => F.collection(db, ...p);
+  const dsCol = () => c('orgs', org.id, 'datasets');
+  const dsDoc = id => d('orgs', org.id, 'datasets', id);
+  const chunkCol = (orgId, id) => c('orgs', orgId, 'datasets', id, 'chunks');
+  const now = () => new Date().toISOString();
+
+  async function writeDataset(orgId, ref, meta, rows, onProgress) {
+    const chunks = chunkRows(rows);
+    for (let i = 0; i < chunks.length; i++) {
+      await F.setDoc(d('orgs', orgId, 'datasets', ref.id, 'chunks', String(i).padStart(4, '0')), { index: i, data: JSON.stringify(chunks[i]) });
+      onProgress && onProgress((i + 1) / chunks.length);
+    }
+    await F.setDoc(ref, { ...meta, chunkCount: chunks.length });
+  }
+
+  async function loadChunks(orgId, id) {
+    const snap = await F.getDocs(F.query(chunkCol(orgId, id), F.orderBy('index')));
+    return snap.docs.flatMap(x => JSON.parse(x.data().data));
+  }
 
   return {
     mode: 'firebase',
+    get me() { return me; },
+    get org() { return org; },
     onAuth(cb) {
-      A.onAuthStateChanged(auth, u => {
-        current = u ? { uid: u.uid, email: u.email } : null;
-        cb(current);
-      });
+      A.onAuthStateChanged(auth, u => { me = u ? { uid: u.uid, email: lower(u.email) } : null; org = null; cb(me); });
     },
     signIn: (e, p) => A.signInWithEmailAndPassword(auth, e, p),
     signUp: (e, p) => A.createUserWithEmailAndPassword(auth, e, p),
     resetPassword: e => A.sendPasswordResetEmail(auth, e),
     signOut: () => A.signOut(auth),
 
+    // ---------- empresas ----------
+    async loadWorkspace() {
+      const u = await F.getDoc(d('users', me.uid));
+      const index = u.exists() ? (u.data().orgs || {}) : {};
+      const orgs = [];
+      for (const [id, name] of Object.entries(index)) {
+        const m = await F.getDoc(d('orgs', id, 'members', me.uid)).catch(() => null);
+        if (m && m.exists()) orgs.push({ id, name, role: m.data().role });
+      }
+      const inv = await F.getDocs(F.query(c('invites'), F.where('email', '==', me.email)));
+      const invites = inv.docs.map(x => ({ id: x.id, ...x.data() }));
+      return { orgs, invites };
+    },
+    useOrg(o) { org = o; setSavedOrg(o.id); },
+    savedOrgId: getSavedOrg,
+    async createOrg(name) {
+      const ref = F.doc(c('orgs'));
+      await F.setDoc(ref, { name, ownerUid: me.uid, createdAt: now() });
+      await F.setDoc(d('orgs', ref.id, 'members', me.uid), { email: me.email, role: 'admin', addedAt: now() });
+      await F.setDoc(d('users', me.uid), { orgs: { [ref.id]: name } }, { merge: true });
+      return { id: ref.id, name, role: 'admin' };
+    },
+    async renameOrg(name) {
+      await F.updateDoc(d('orgs', org.id), { name });
+      await F.setDoc(d('users', me.uid), { orgs: { [org.id]: name } }, { merge: true });
+      org = { ...org, name };
+    },
+    async acceptInvite(inv) {
+      await F.setDoc(d('orgs', inv.orgId, 'members', me.uid), { email: me.email, role: inv.role, addedAt: now() });
+      await F.setDoc(d('users', me.uid), { orgs: { [inv.orgId]: inv.orgName } }, { merge: true });
+      await F.deleteDoc(d('invites', inv.id));
+      return { id: inv.orgId, name: inv.orgName, role: inv.role };
+    },
+    async declineInvite(inv) { await F.deleteDoc(d('invites', inv.id)); },
+    async leaveOrg(orgId) {
+      await F.deleteDoc(d('orgs', orgId, 'members', me.uid));
+      await F.setDoc(d('users', me.uid), { orgs: { [orgId]: F.deleteField() } }, { merge: true });
+    },
+
+    // ---------- equipe (admin) ----------
+    async listMembers() {
+      const s = await F.getDocs(c('orgs', org.id, 'members'));
+      return s.docs.map(x => ({ uid: x.id, ...x.data() }));
+    },
+    async listInvites() {
+      const s = await F.getDocs(F.query(c('invites'), F.where('orgId', '==', org.id)));
+      return s.docs.map(x => ({ id: x.id, ...x.data() }));
+    },
+    async invite(email, role) {
+      email = lower(email);
+      await F.setDoc(d('invites', inviteId(email, org.id)), { email, orgId: org.id, orgName: org.name, role, invitedBy: me.email, createdAt: now() });
+    },
+    async cancelInvite(id) { await F.deleteDoc(d('invites', id)); },
+    async setRole(uid, role) { await F.updateDoc(d('orgs', org.id, 'members', uid), { role }); },
+    async removeMember(uid) { await F.deleteDoc(d('orgs', org.id, 'members', uid)); },
+
+    // ---------- painéis ----------
     async listDatasets() {
       const snap = await F.getDocs(F.query(dsCol(), F.orderBy('createdAt', 'desc')));
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      return snap.docs.map(x => ({ id: x.id, ...x.data() }));
     },
     async saveDataset(meta, rows, onProgress) {
       const ref = F.doc(dsCol());
-      const chunks = chunkRows(rows);
-      for (let i = 0; i < chunks.length; i++) {
-        await F.setDoc(F.doc(chunkCol(ref.id), String(i).padStart(4, '0')),
-          { index: i, data: JSON.stringify(chunks[i]) });
-        onProgress && onProgress((i + 1) / chunks.length);
-      }
-      // metadados por último: o conjunto só aparece quando estiver completo
-      await F.setDoc(ref, { ...meta, chunkCount: chunks.length, createdAt: new Date().toISOString() });
+      await writeDataset(org.id, ref, { ...meta, createdAt: now(), createdBy: me.email }, rows, onProgress);
       return ref.id;
     },
-    async loadRows(id) {
-      const snap = await F.getDocs(F.query(chunkCol(id), F.orderBy('index')));
-      return snap.docs.flatMap(d => JSON.parse(d.data().data));
-    },
-    async updateDashboard(id, dashboard) {
-      await F.updateDoc(dsDoc(id), { dashboard });
-    },
+    loadRows: id => loadChunks(org.id, id),
+    async updateDashboard(id, dashboard) { await F.updateDoc(dsDoc(id), { dashboard }); },
     async deleteDataset(id) {
-      const snap = await F.getDocs(chunkCol(id));
-      await Promise.all(snap.docs.map(d => F.deleteDoc(d.ref)));
+      const ds = await F.getDoc(dsDoc(id));
+      const shareId = ds.exists() ? ds.data().shareId : null;
+      if (shareId) await F.deleteDoc(d('shares', shareId)).catch(() => {});
+      const snap = await F.getDocs(chunkCol(org.id, id));
+      await Promise.all(snap.docs.map(x => F.deleteDoc(x.ref)));
       await F.deleteDoc(dsDoc(id));
+    },
+
+    // ---------- compartilhar por link ----------
+    async createShare(ds) {
+      const t = token();
+      await F.setDoc(d('shares', t), { orgId: org.id, datasetId: ds.id, name: ds.name, createdBy: me.email, createdAt: now() });
+      await F.updateDoc(dsDoc(ds.id), { shareId: t });
+      return t;
+    },
+    async revokeShare(ds) {
+      if (ds.shareId) await F.deleteDoc(d('shares', ds.shareId)).catch(() => {});
+      await F.updateDoc(dsDoc(ds.id), { shareId: F.deleteField() });
+    },
+    async loadShared(t) {
+      const s = await F.getDoc(d('shares', t));
+      if (!s.exists()) return null;
+      const { orgId, datasetId } = s.data();
+      const ds = await F.getDoc(d('orgs', orgId, 'datasets', datasetId));
+      if (!ds.exists() || ds.data().shareId !== t) return null;
+      return { ds: { id: ds.id, ...ds.data() }, rows: await loadChunks(orgId, datasetId) };
+    },
+
+    // ---------- migração do formato antigo (users/{uid}/datasets) ----------
+    async migrateLegacy() {
+      const old = await F.getDocs(c('users', me.uid, 'datasets'));
+      let n = 0;
+      for (const x of old.docs) {
+        const meta = x.data();
+        const rows = (await F.getDocs(F.query(c('users', me.uid, 'datasets', x.id, 'chunks'), F.orderBy('index'))))
+          .docs.flatMap(ch => JSON.parse(ch.data().data));
+        const ref = F.doc(dsCol());
+        const { chunkCount, ...rest } = meta;
+        await writeDataset(org.id, ref, { ...rest, createdBy: me.email }, rows);
+        n++;
+      }
+      await F.setDoc(d('users', me.uid), { migrated: true }, { merge: true });
+      return n;
+    },
+    async needsMigration() {
+      const u = await F.getDoc(d('users', me.uid));
+      if (u.exists() && u.data().migrated) return false;
+      const old = await F.getDocs(F.query(c('users', me.uid, 'datasets'), F.limit(1)));
+      return !old.empty;
     }
   };
 }
 
-// ---------------- Modo demo (IndexedDB) ----------------
+// =============================================================
+//  Modo demo: mesmo comportamento, tudo no IndexedDB
+// =============================================================
 function createLocalStore() {
   const SESSION = 'nuvembi_session';
   const listeners = [];
-  let current = null;
-  try { current = JSON.parse(localStorage.getItem(SESSION)); } catch { current = null; }
+  let me = null, org = null;
+  try { me = JSON.parse(localStorage.getItem(SESSION)); } catch { me = null; }
 
   let dbp;
   const db = () => dbp ||= new Promise((res, rej) => {
@@ -99,9 +229,9 @@ function createLocalStore() {
     r.onerror = () => rej(r.error);
   });
   const tx = async (mode, fn) => {
-    const d = await db();
+    const x = await db();
     return new Promise((res, rej) => {
-      const req = fn(d.transaction('kv', mode).objectStore('kv'));
+      const req = fn(x.transaction('kv', mode).objectStore('kv'));
       req.onsuccess = () => res(req.result);
       req.onerror = () => rej(req.error);
     });
@@ -109,46 +239,148 @@ function createLocalStore() {
   const get = k => tx('readonly', s => s.get(k));
   const set = (k, v) => tx('readwrite', s => s.put(v, k));
   const del = k => tx('readwrite', s => s.delete(k));
-  const key = s => `${current.uid}:${s}`;
-  const emit = () => listeners.forEach(cb => cb(current));
+  const getMap = async k => (await get(k)) || {};
+  const emit = () => listeners.forEach(cb => cb(me));
+  const now = () => new Date().toISOString();
+  const deny = () => { throw Object.assign(new Error('Sem permissão'), { code: 'permission-denied' }); };
+  const myRole = async orgId => (await getMap('members:' + orgId))[me.uid]?.role;
+  const needEdit = async () => { if (!['admin', 'editor'].includes(await myRole(org.id))) deny(); };
+  const needAdmin = async () => { if ((await myRole(org.id)) !== 'admin') deny(); };
 
   const login = email => {
-    current = { uid: email.toLowerCase(), email };
-    try { localStorage.setItem(SESSION, JSON.stringify(current)); } catch {}
+    me = { uid: lower(email), email: lower(email) }; org = null;
+    try { localStorage.setItem(SESSION, JSON.stringify(me)); } catch {}
     emit();
   };
 
   return {
     mode: 'local',
-    onAuth(cb) { listeners.push(cb); cb(current); },
+    get me() { return me; },
+    get org() { return org; },
+    onAuth(cb) { listeners.push(cb); cb(me); },
     async signIn(e, p) { if (!p || p.length < 6) throw { code: 'auth/weak-password' }; login(e); },
     async signUp(e, p) { if (!p || p.length < 6) throw { code: 'auth/weak-password' }; login(e); },
     async resetPassword() {},
-    async signOut() { current = null; try { localStorage.removeItem(SESSION); } catch {} emit(); },
+    async signOut() { me = null; org = null; try { localStorage.removeItem(SESSION); } catch {} emit(); },
+
+    async loadWorkspace() {
+      const index = (await getMap('user:' + me.uid)).orgs || {};
+      const orgs = [];
+      for (const [id, name] of Object.entries(index)) {
+        const role = await myRole(id);
+        if (role) orgs.push({ id, name, role });
+      }
+      const invites = Object.entries(await getMap('invites')).filter(([, v]) => v.email === me.email).map(([id, v]) => ({ id, ...v }));
+      return { orgs, invites };
+    },
+    useOrg(o) { org = o; setSavedOrg(o.id); },
+    savedOrgId: getSavedOrg,
+    async createOrg(name) {
+      const id = 'org_' + token(8);
+      const orgs = await getMap('orgs'); orgs[id] = { name, ownerUid: me.uid, createdAt: now() }; await set('orgs', orgs);
+      await set('members:' + id, { [me.uid]: { email: me.email, role: 'admin', addedAt: now() } });
+      const u = await getMap('user:' + me.uid); u.orgs = { ...(u.orgs || {}), [id]: name }; await set('user:' + me.uid, u);
+      return { id, name, role: 'admin' };
+    },
+    async renameOrg(name) {
+      await needAdmin();
+      const orgs = await getMap('orgs'); orgs[org.id].name = name; await set('orgs', orgs);
+      const u = await getMap('user:' + me.uid); u.orgs[org.id] = name; await set('user:' + me.uid, u);
+      org = { ...org, name };
+    },
+    async acceptInvite(inv) {
+      const invites = await getMap('invites');
+      if (!invites[inv.id] || invites[inv.id].email !== me.email) deny();
+      const m = await getMap('members:' + inv.orgId); m[me.uid] = { email: me.email, role: inv.role, addedAt: now() }; await set('members:' + inv.orgId, m);
+      const u = await getMap('user:' + me.uid); u.orgs = { ...(u.orgs || {}), [inv.orgId]: inv.orgName }; await set('user:' + me.uid, u);
+      delete invites[inv.id]; await set('invites', invites);
+      return { id: inv.orgId, name: inv.orgName, role: inv.role };
+    },
+    async declineInvite(inv) { const i = await getMap('invites'); delete i[inv.id]; await set('invites', i); },
+    async leaveOrg(orgId) {
+      const m = await getMap('members:' + orgId); delete m[me.uid]; await set('members:' + orgId, m);
+      const u = await getMap('user:' + me.uid); delete u.orgs[orgId]; await set('user:' + me.uid, u);
+    },
+
+    async listMembers() { return Object.entries(await getMap('members:' + org.id)).map(([uid, v]) => ({ uid, ...v })); },
+    async listInvites() { await needAdmin(); return Object.entries(await getMap('invites')).filter(([, v]) => v.orgId === org.id).map(([id, v]) => ({ id, ...v })); },
+    async invite(email, role) {
+      await needAdmin();
+      email = lower(email);
+      const i = await getMap('invites'); i[inviteId(email, org.id)] = { email, orgId: org.id, orgName: org.name, role, invitedBy: me.email, createdAt: now() }; await set('invites', i);
+    },
+    async cancelInvite(id) { await needAdmin(); const i = await getMap('invites'); delete i[id]; await set('invites', i); },
+    async setRole(uid, role) { await needAdmin(); const m = await getMap('members:' + org.id); m[uid].role = role; await set('members:' + org.id, m); },
+    async removeMember(uid) { await needAdmin(); const m = await getMap('members:' + org.id); delete m[uid]; await set('members:' + org.id, m); },
 
     async listDatasets() {
-      const list = (await get(key('index'))) || [];
+      const list = (await get('datasets:' + org.id)) || [];
       return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
     async saveDataset(meta, rows, onProgress) {
+      await needEdit();
       const id = 'ds_' + Date.now().toString(36);
-      await set(key('rows:' + id), rows);
-      const list = (await get(key('index'))) || [];
-      list.push({ id, ...meta, createdAt: new Date().toISOString() });
-      await set(key('index'), list);
+      await set(`rows:${org.id}:${id}`, rows);
+      const list = (await get('datasets:' + org.id)) || [];
+      list.push({ id, ...meta, createdAt: now(), createdBy: me.email });
+      await set('datasets:' + org.id, list);
       onProgress && onProgress(1);
       return id;
     },
-    async loadRows(id) { return (await get(key('rows:' + id))) || []; },
+    async loadRows(id) { return (await get(`rows:${org.id}:${id}`)) || []; },
     async updateDashboard(id, dashboard) {
-      const list = (await get(key('index'))) || [];
-      const ds = list.find(d => d.id === id);
-      if (ds) { ds.dashboard = dashboard; await set(key('index'), list); }
+      await needEdit();
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === id);
+      if (ds) { ds.dashboard = dashboard; await set('datasets:' + org.id, list); }
     },
     async deleteDataset(id) {
-      await del(key('rows:' + id));
-      const list = ((await get(key('index'))) || []).filter(d => d.id !== id);
-      await set(key('index'), list);
+      await needEdit();
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === id);
+      if (ds?.shareId) { const s = await getMap('shares'); delete s[ds.shareId]; await set('shares', s); }
+      await del(`rows:${org.id}:${id}`);
+      await set('datasets:' + org.id, list.filter(x => x.id !== id));
+    },
+
+    async createShare(ds) {
+      await needEdit();
+      const t = token();
+      const s = await getMap('shares'); s[t] = { orgId: org.id, datasetId: ds.id, name: ds.name, createdBy: me.email, createdAt: now() }; await set('shares', s);
+      const list = (await get('datasets:' + org.id)) || [];
+      list.find(x => x.id === ds.id).shareId = t; await set('datasets:' + org.id, list);
+      return t;
+    },
+    async revokeShare(ds) {
+      await needEdit();
+      const s = await getMap('shares'); delete s[ds.shareId]; await set('shares', s);
+      const list = (await get('datasets:' + org.id)) || [];
+      delete list.find(x => x.id === ds.id).shareId; await set('datasets:' + org.id, list);
+    },
+    async loadShared(t) {
+      const s = (await getMap('shares'))[t];
+      if (!s) return null;
+      const ds = ((await get('datasets:' + s.orgId)) || []).find(x => x.id === s.datasetId);
+      if (!ds || ds.shareId !== t) return null;
+      return { ds, rows: (await get(`rows:${s.orgId}:${s.datasetId}`)) || [] };
+    },
+
+    async needsMigration() {
+      const u = await getMap('user:' + me.uid);
+      return !u.migrated && !!(await get(`${me.uid}:index`))?.length;
+    },
+    async migrateLegacy() {
+      const old = (await get(`${me.uid}:index`)) || [];
+      const list = (await get('datasets:' + org.id)) || [];
+      for (const m of old) {
+        const rows = (await get(`${me.uid}:rows:${m.id}`)) || [];
+        const id = 'ds_' + token(8);
+        await set(`rows:${org.id}:${id}`, rows);
+        list.push({ ...m, id, createdBy: me.email });
+      }
+      await set('datasets:' + org.id, list);
+      const u = await getMap('user:' + me.uid); u.migrated = true; await set('user:' + me.uid, u);
+      return old.length;
     }
   };
 }
