@@ -250,3 +250,6 @@ table.summary tr.clickable:hover td { background: #f8fafc; }
 .lb-item.selected:hover { background: #00863d; }
 .lb-foot { display: flex; justify-content: space-between; }
 @media (max-width: 900px) { .sel-bar { flex-wrap: wrap; } .sel-bar .rowcount { width: 100%; text-align: right; } }
+.undo-group { display: flex; gap: .25rem; }
+.btn.icon { width: 40px; padding: .6rem 0; font-size: 17px; }
+.btn.icon:disabled { opacity: .35; cursor: default; }

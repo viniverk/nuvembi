@@ -267,7 +267,49 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     draw();
   }
 
-  const markDirty = () => { dirty = true; };
+  // ---------- desfazer / refazer do modo edição ----------
+  // guarda o layout antes de cada mudança (posição, tamanho, gráficos, escolha de filtros)
+  let undoStack = [], redoStack = [], lastSnap = null;
+  const snapshot = () => clone({ widgets: cfg.widgets, filterCols: cfg.filterCols, dateCol: cfg.dateCol });
+  const restore = snap => { cfg.widgets = clone(snap.widgets); cfg.filterCols = clone(snap.filterCols); cfg.dateCol = snap.dateCol; };
+  function resetUndo() { undoStack = []; redoStack = []; lastSnap = snapshot(); }
+  function markDirty() {
+    dirty = true;
+    if (!editing || !lastSnap) return;
+    const now = snapshot();
+    if (JSON.stringify(now) === JSON.stringify(lastSnap)) return; // só seleção mudou: não entra no histórico
+    undoStack.push(lastSnap);
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack = [];
+    lastSnap = now;
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(snapshot());
+    restore(undoStack.pop());
+    lastSnap = snapshot();
+    dirty = true;
+    draw();
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(snapshot());
+    restore(redoStack.pop());
+    lastSnap = snapshot();
+    dirty = true;
+    draw();
+  }
+  const onKeyUndo = e => {
+    if (!document.body.contains(el)) { document.removeEventListener('keydown', onKeyUndo); return; }
+    if (!editing) return;
+    if (document.querySelector('.modal-back')) return;                 // janela aberta: o Ctrl+Z é do campo de texto
+    if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+  };
+  document.addEventListener('keydown', onKeyUndo);
   const opt = (v, label, sel) => `<option value="${esc(v)}" ${sel ? 'selected' : ''}>${esc(label)}</option>`;
 
   function draw() {
@@ -279,6 +321,10 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
     const toolbar = editing ? `
       <div class="dash-toolbar card editing-bar">
         <div class="hint">✎ <strong>Modo edição</strong> — arraste o gráfico pelo título para qualquer lugar e puxe o canto ◢ para mudar o tamanho.</div>
+        <div class="undo-group">
+          <button class="btn ghost icon" data-act="undo" title="Desfazer (Ctrl+Z)" ${undoStack.length ? '' : 'disabled'}>↶</button>
+          <button class="btn ghost icon" data-act="redo" title="Refazer (Ctrl+Y)" ${redoStack.length ? '' : 'disabled'}>↷</button>
+        </div>
         <button class="btn ghost" data-act="filters">⚲ Escolher filtros</button>
         <button class="btn ghost" data-act="add">+ Adicionar gráfico</button>
         <button class="btn ghost" data-act="cancel">Cancelar</button>
@@ -552,7 +598,9 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
   // ---------------- eventos ----------------
   function bindEvents() {
     const act = (name, fn) => el.querySelectorAll(`[data-act="${name}"]`).forEach(b => b.addEventListener('click', fn));
-    act('edit', () => { editing = true; dirty = false; draw(); });
+    act('edit', () => { editing = true; dirty = false; resetUndo(); draw(); });
+    act('undo', undo);
+    act('redo', redo);
     act('cancel', () => {
       if (dirty && !confirm('Descartar as alterações do painel?')) return;
       cfg = clone(saved); editing = false; draw();
@@ -561,7 +609,7 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
       const btn = e.currentTarget; btn.disabled = true;
       try {
         await onSave(clone(cfg));
-        saved = clone(cfg); editing = false; dirty = false; draw();
+        saved = clone(cfg); editing = false; dirty = false; resetUndo(); draw();
       } catch { btn.disabled = false; }
     });
     act('export', () => exportCSV(ds, applyFilters(allRows, cfg, cfg.dateCol)));
@@ -786,11 +834,11 @@ export function mountDashboard(el, ds, allRows, savedCfg, onSave) {
 
   draw();
   const ro = new ResizeObserver(() => {
-    if (!document.body.contains(el)) { ro.disconnect(); return; }
+    if (!document.body.contains(el)) { ro.disconnect(); document.removeEventListener('keydown', onKeyUndo); return; }
     layout();
   });
   ro.observe(el);
-  return { destroy: () => { ro.disconnect(); charts.forEach(c => c.destroy()); } };
+  return { destroy: () => { ro.disconnect(); document.removeEventListener('keydown', onKeyUndo); charts.forEach(c => c.destroy()); } };
 }
 
 // ---------------- utilitários ----------------
