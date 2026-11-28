@@ -6,9 +6,9 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=16';
-import { buildModel } from './model.js?v=16';
-import { ColTable } from './coltable.js?v=16';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=17';
+import { buildModel } from './model.js?v=17';
+import { ColTable } from './coltable.js?v=17';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
@@ -351,6 +351,21 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   let saved = normalizeConfig(savedCfg, ds, mainT);
   let cfg = clone(saved);
   let editing = false;
+
+  // ---------- pastas (abas), como no Qlik: cada pasta tem seus gráficos; seleções valem para todas ----------
+  const ensureSheets = c => {
+    if (!c.sheets || !c.sheets.length) c.sheets = [{ id: uid(), name: 'Pasta 1', widgets: c.widgets || [] }];
+    delete c.widgets;
+    return c;
+  };
+  ensureSheets(saved); ensureSheets(cfg);
+  let sheetIdx = 0;
+  cfg.widgets = cfg.sheets[0].widgets;                    // gráficos da pasta ativa
+  const syncSheet = () => { cfg.sheets[sheetIdx].widgets = cfg.widgets; };
+  const openSheet = i => { syncSheet(); sheetIdx = clamp(i, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets; };
+  const forSave = () => { syncSheet(); const c = clone(cfg); delete c.widgets; return c; };
+  const allWidgets = () => { syncSheet(); return cfg.sheets.flatMap(sh => sh.widgets); };
+  const resetFromSaved = () => { cfg = clone(saved); sheetIdx = clamp(sheetIdx, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets; };
   let dirty = false;
   const charts = new Map();
 
@@ -388,8 +403,11 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   // ---------- desfazer / refazer do modo edição ----------
   // guarda o layout antes de cada mudança (posição, tamanho, gráficos, escolha de filtros)
   let undoStack = [], redoStack = [], lastSnap = null;
-  const snapshot = () => clone({ widgets: cfg.widgets, filterCols: cfg.filterCols, dateCol: cfg.dateCol, masters: cfg.masters });
-  const restore = snap => { cfg.widgets = clone(snap.widgets); cfg.filterCols = clone(snap.filterCols); cfg.dateCol = snap.dateCol; cfg.masters = clone(snap.masters || []); };
+  const snapshot = () => { syncSheet(); return clone({ sheets: cfg.sheets, sheetIdx, filterCols: cfg.filterCols, dateCol: cfg.dateCol, masters: cfg.masters }); };
+  const restore = snap => {
+    cfg.sheets = clone(snap.sheets); sheetIdx = clamp(snap.sheetIdx || 0, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets;
+    cfg.filterCols = clone(snap.filterCols); cfg.dateCol = snap.dateCol; cfg.masters = clone(snap.masters || []);
+  };
   function resetUndo() { undoStack = []; redoStack = []; lastSnap = snapshot(); }
   function markDirty() {
     dirty = true;
@@ -454,8 +472,23 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       <div class="dash-toolbar">
         <div class="spacer"></div>
         <button class="btn ghost" data-act="export">Exportar CSV</button>
-        ${onSave ? '<button class="btn" data-act="edit">✎ Editar painel</button>' : ''}
+        ${onSave ? '<button class="btn" data-act="edit">✎ Editar</button>' : ''}
       </div>`;
+
+    // ----- abas das pastas -----
+    const nSheets = cfg.sheets.length;
+    const tabs = (nSheets > 1 || editing) ? `
+      <div class="sheet-tabs">
+        <div class="sheet-list">${cfg.sheets.map((sh, i) => `<button class="sheet-tab ${i === sheetIdx ? 'active' : ''}" data-sheet="${i}" ${editing ? 'title="Duplo clique para renomear"' : ''}>${esc(sh.name)}</button>`).join('')}</div>
+        ${editing ? `<div class="sheet-tools">
+          <button data-shact="add" title="Nova pasta">+ Pasta</button>
+          <button data-shact="rename" title="Renomear pasta">✎</button>
+          <button data-shact="dup" title="Duplicar pasta">⧉</button>
+          <button data-shact="left" title="Mover para a esquerda" ${sheetIdx === 0 ? 'disabled' : ''}>◀</button>
+          <button data-shact="right" title="Mover para a direita" ${sheetIdx === nSheets - 1 ? 'disabled' : ''}>▶</button>
+          <button data-shact="del" title="Excluir pasta" ${nSheets < 2 ? 'disabled' : ''}>🗑</button>
+        </div>` : ''}
+      </div>` : '';
 
     // ----- barra de seleções atuais -----
     const selEntries = Object.entries(cfg.filters);
@@ -493,12 +526,12 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         ${filterBtns || '<span class="muted">Nenhum filtro escolhido. Clique em "Escolher filtros".</span>'}
       </div>` : '';
 
-    el.innerHTML = `${toolbar}${selBar}${filterBar}
+    el.innerHTML = `${toolbar}${tabs}${selBar}${filterBar}
       <div class="dash-canvas ${editing ? 'editing' : ''}">
         ${editing ? '<div class="grid-bg"></div><div class="drop-ghost" hidden></div>' : ''}
         ${cfg.widgets.map(w => widgetHtml(w)).join('')}
       </div>
-      ${!cfg.widgets.length && !editing ? '<div class="card empty"><p>Este painel está vazio. Clique em <strong>Editar painel</strong> para adicionar gráficos.</p></div>' : ''}`;
+      ${!cfg.widgets.length && !editing ? `<div class="card empty"><p>${nSheets > 1 ? 'Esta pasta' : 'Este app'} está vazio. ${onSave ? 'Clique em <strong>Editar</strong> para adicionar gráficos.' : ''}</p></div>` : ''}`;
 
     layout();
     const dateless = { filters: Object.fromEntries(Object.entries(cfg.filters).filter(([k]) => k !== '__year' && k !== '__month')) };
@@ -777,15 +810,47 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     act('edit', () => { editing = true; dirty = false; resetUndo(); draw(); });
     act('undo', undo);
     act('redo', redo);
+    el.querySelectorAll('[data-sheet]').forEach(b => {
+      b.addEventListener('click', () => { openSheet(+b.dataset.sheet); if (editing) lastSnap = snapshot(); draw(); });
+      b.addEventListener('dblclick', () => { if (editing) renameSheet(); });
+    });
+    const renameSheet = () => {
+      const name = prompt('Nome da pasta:', cfg.sheets[sheetIdx].name);
+      if (name && name.trim()) { cfg.sheets[sheetIdx].name = name.trim().slice(0, 40); markDirty(); draw(); }
+    };
+    el.querySelectorAll('[data-shact]').forEach(b => b.addEventListener('click', () => {
+      const a = b.dataset.shact;
+      syncSheet();
+      if (a === 'add') {
+        cfg.sheets.splice(sheetIdx + 1, 0, { id: uid(), name: `Pasta ${cfg.sheets.length + 1}`, widgets: [] });
+        openSheet(sheetIdx + 1);
+      } else if (a === 'dup') {
+        const cur = cfg.sheets[sheetIdx];
+        cfg.sheets.splice(sheetIdx + 1, 0, { id: uid(), name: `${cur.name} (cópia)`, widgets: clone(cur.widgets).map(w => ({ ...w, id: uid() })) });
+        openSheet(sheetIdx + 1);
+      } else if (a === 'rename') return renameSheet();
+      else if (a === 'left' || a === 'right') {
+        const j = sheetIdx + (a === 'left' ? -1 : 1);
+        [cfg.sheets[sheetIdx], cfg.sheets[j]] = [cfg.sheets[j], cfg.sheets[sheetIdx]];
+        sheetIdx = j; cfg.widgets = cfg.sheets[sheetIdx].widgets;
+      } else if (a === 'del') {
+        if (cfg.sheets.length < 2) return;
+        if (!confirm(`Excluir a pasta "${cfg.sheets[sheetIdx].name}" e os gráficos dela?`)) return;
+        cfg.sheets.splice(sheetIdx, 1);
+        sheetIdx = clamp(sheetIdx, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets;
+      }
+      markDirty(); draw();
+    }));
     act('cancel', () => {
       if (dirty && !confirm('Descartar as alterações do painel?')) return;
-      cfg = clone(saved); editing = false; draw();
+      resetFromSaved(); editing = false; draw();
     });
     act('save', async e => {
       const btn = e.currentTarget; btn.disabled = true;
       try {
-        await onSave(clone(cfg));
-        saved = clone(cfg); editing = false; dirty = false; resetUndo(); draw();
+        const out = forSave();
+        await onSave(out);
+        saved = clone(out); editing = false; dirty = false; resetUndo(); draw();
       } catch { btn.disabled = false; }
     });
     act('export', () => exportCSV(ds.name, mainT, model.select(cfg.filters, cfg.dateCol).main));
@@ -896,7 +961,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   // ---------------- janela: editar/adicionar gráfico ----------------
   function editWidget(existing) {
     const isNew = !existing;
-    const mainW = cfg.widgets.find(x => x.measure && x.measure !== '__count');
+    const mainW = allWidgets().find(x => x.measure && x.measure !== '__count' && x.agg !== 'avg');
     const mainMeasure = mainW?.measure || numCols[0]?.name || '__count';
     const base = existing ? clone(existing) : {
       id: uid(), type: 'bar', title: '',
@@ -1000,7 +1065,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
 
   // ---------------- janela: itens mestres ----------------
   function manageMasters() {
-    const usedBy = id => cfg.widgets.filter(w => w.measure === 'm:' + id).length;
+    const usedBy = id => allWidgets().filter(w => w.measure === 'm:' + id).length;
     const body = `
       <p class="muted">Medidas com nome que você cria uma vez e usa em qualquer gráfico, como no Qlik. Ex.: <code>Faturamento</code>, <code>Ticket médio</code>, <code>% da meta</code>.</p>
       <div class="master-list">${cfg.masters.map(m => {
@@ -1022,7 +1087,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       const n = usedBy(m.id);
       if (!confirm(`Excluir o item mestre "${m.name}"?${n ? `\n${n} gráfico(s) usam ele e vão passar a mostrar "Quantidade de linhas".` : ''}`)) return;
       cfg.masters = cfg.masters.filter(x => x !== m);
-      cfg.widgets.forEach(w => { if (w.measure === 'm:' + m.id) { w.measure = '__count'; w.agg = 'count'; } });
+      allWidgets().forEach(w => { if (w.measure === 'm:' + m.id) { w.measure = '__count'; w.agg = 'count'; } });
       markDirty(); modal.remove(); draw(); manageMasters();
     }));
   }

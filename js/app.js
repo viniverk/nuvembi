@@ -1,13 +1,13 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=16';
-import { createStore, ROLES } from './store.js?v=16';
-import { readFile, normalizeRows } from './parser.js?v=16';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=16';
-import { buildModel } from './model.js?v=16';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=16';
-import { ColTable } from './coltable.js?v=16';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=17';
+import { createStore, ROLES } from './store.js?v=17';
+import { readFile, normalizeRows } from './parser.js?v=17';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=17';
+import { buildModel } from './model.js?v=17';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=17';
+import { ColTable } from './coltable.js?v=17';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
