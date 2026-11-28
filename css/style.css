@@ -528,3 +528,19 @@ textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--primary); }
 .hl-var { color: #c2410c; font-weight: 600; }
 .hl-lbl { color: #0f172a; font-weight: 700; text-decoration: underline; text-decoration-color: #cbd5e1; text-underline-offset: 3px; }
 .hl-op { color: #64748b; }
+
+/* ---------- tabela de dados: escolher campos ---------- */
+.dt-fields { grid-column: 1 / -1; }
+.dt-tools { display: flex; gap: .4rem; align-items: center; margin: .3rem 0; }
+.dt-tools input { flex: 1; min-width: 0; }
+.dt-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.dt-list li { display: flex; align-items: center; gap: .5rem; padding: .3rem .6rem; border-bottom: 1px solid #f1f5f9; font-size: 13px; color: var(--muted); }
+.dt-list li.on { color: var(--text); }
+.dt-list li:last-child { border-bottom: 0; }
+.dt-list label { flex: 1; display: flex; align-items: center; gap: .45rem; cursor: pointer; margin: 0; font-weight: 400; }
+.dt-list label input { width: auto; min-width: 0; }
+.dt-list .tag { font-style: normal; font-size: 10px; padding: 0 .35rem; }
+.dt-move { display: flex; gap: 2px; }
+.dt-move button { border: 1px solid var(--line); background: #fff; border-radius: 6px; width: 24px; height: 22px; cursor: pointer; font-size: 12px; line-height: 1; color: var(--text); }
+.dt-move button:disabled { opacity: .3; cursor: default; }
+.dt-move button:not(:disabled):hover { border-color: var(--primary); color: var(--primary); }

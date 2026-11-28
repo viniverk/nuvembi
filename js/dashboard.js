@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName } from './parser.js?v=25';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=25';
-import { buildModel } from './model.js?v=25';
-import { ColTable } from './coltable.js?v=25';
+import { isCodeName } from './parser.js?v=26';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=26';
+import { buildModel } from './model.js?v=26';
+import { ColTable } from './coltable.js?v=26';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -649,10 +649,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     if (w.type === 'datatable') {
       const t = model.byId[w.table] || model.primary;
       const tRows = ctx.state[t.id];
-      const gs = t.columns.map(c => t.t.getter(c.name));
+      // campos escolhidos na edição (na ordem escolhida); sem escolha = todos
+      const picked = Array.isArray(w.fields) ? w.fields.map(n => t.columns.find(c => c.name === n)).filter(Boolean) : [];
+      const tcols = picked.length ? picked : t.columns;
+      const gs = tcols.map(c => t.t.getter(c.name));
       body.innerHTML = `<div class="table-wrap fill"><table>
-        <thead><tr>${t.columns.map(c => `<th class="${c.type}">${esc(c.name)}</th>`).join('')}</tr></thead>
-        <tbody>${Array.from(tRows.subarray(0, 200), i => `<tr>${t.columns.map((c, j) => `<td class="${c.type}">${esc(fmtCell(gs[j](i), c.type))}</td>`).join('')}</tr>`).join('')}</tbody>
+        <thead><tr>${tcols.map(c => `<th class="${c.type}">${esc(c.name)}</th>`).join('')}</tr></thead>
+        <tbody>${Array.from(tRows.subarray(0, 200), i => `<tr>${tcols.map((c, j) => `<td class="${c.type}">${esc(fmtCell(gs[j](i), c.type))}</td>`).join('')}</tr>`).join('')}</tbody>
       </table></div>${tRows.length > 200 ? `<div class="muted small">Mostrando 200 de ${nf.format(tRows.length)} linhas. Use "Exportar CSV" para ver tudo.</div>` : ''}`;
       return;
     }
@@ -1003,6 +1006,16 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           ${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>
           ${textMeasures.length ? `<optgroup label="Contar valores (texto e datas)">${textMeasures.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>` : ''}</select></label>
         ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || PID))).join('')}</select></label>` : ''}
+        <div class="field dt-fields" data-show="fields">
+          <span>Campos da tabela <small class="muted" id="dt-count"></small></span>
+          <div class="dt-tools">
+            <input type="search" id="dt-search" placeholder="Buscar campo…">
+            <button type="button" class="btn ghost small" id="dt-all">Todos</button>
+            <button type="button" class="btn ghost small" id="dt-none">Nenhum</button>
+          </div>
+          <ul class="dt-list" id="dt-list"></ul>
+          <small class="muted">Marque os campos que quer ver. Use ↑ ↓ para mudar a ordem das colunas.</small>
+        </div>
         <label class="field" data-show="agg"><span>Cálculo</span><select name="agg">${Object.entries(AGG).map(([k, v]) => opt(k, v, k === base.agg)).join('')}</select></label>
         <label class="field" data-show="top"><span>Mostrar</span><select name="top">
           ${[[0, 'Todos os itens'], [5, 'Top 5'], [10, 'Top 10'], [15, 'Top 15'], [20, 'Top 20'], [30, 'Top 30'], [50, 'Top 50']].map(([v, l]) => opt(v, l, +base.top === v)).join('')}</select></label>
@@ -1029,7 +1042,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         measure: form.measure.value, agg: aggFor(form.measure.value, form.agg.value),
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
         format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
-        table: form.wtable ? form.wtable.value : PID
+        table: form.wtable ? form.wtable.value : PID,
+        fields: t === 'datatable' ? dtPicked() : base.fields
       };
       if (isNew) {
         w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
@@ -1060,6 +1074,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         agg: t !== 'datatable' && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
         format: t !== 'datatable',
         table: t === 'datatable',
+        fields: t === 'datatable',
         period: t === 'kpi' && !!cfg.dateCol,
         compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
         top: !['kpi', 'datatable'].includes(t),
@@ -1083,6 +1098,51 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       if (x.name === 'dim' && cols.find(c => c.name === x.value)?.type === 'date') { form.sort.value = 'label'; form.top.value = '0'; }
       refresh();
     }));
+    // ----- tabela de dados: escolher e ordenar campos -----
+    const dtTable = () => model.byId[form.wtable ? form.wtable.value : PID] || model.primary;
+    let dtOrder = [], dtSel = new Set();
+    const dtReset = (t, fields) => {
+      const names = t.columns.map(c => c.name);
+      const keep = Array.isArray(fields) ? fields.filter(n => names.includes(n)) : [];
+      dtOrder = keep.length ? [...keep, ...names.filter(n => !keep.includes(n))] : names;
+      dtSel = new Set(keep.length ? keep : names);
+    };
+    const dtList = form.querySelector('#dt-list'), dtSearch = form.querySelector('#dt-search');
+    const dtRender = () => {
+      const t = dtTable();
+      const q = dtSearch.value.trim().toLowerCase();
+      dtList.innerHTML = dtOrder.map((n, k) => {
+        const c = t.columns.find(x => x.name === n);
+        return `<li ${q && !n.toLowerCase().includes(q) ? 'hidden' : ''} class="${dtSel.has(n) ? 'on' : ''}">
+          <label><input type="checkbox" data-dtf="${esc(n)}" ${dtSel.has(n) ? 'checked' : ''}> ${esc(n)} <i class="tag ${c?.type}">${c?.type === 'number' ? 'número' : c?.type === 'date' ? 'data' : 'texto'}</i></label>
+          <span class="dt-move"><button type="button" data-dtup="${k}" ${k ? '' : 'disabled'} title="Subir">↑</button><button type="button" data-dtdown="${k}" ${k < dtOrder.length - 1 ? '' : 'disabled'} title="Descer">↓</button></span>
+        </li>`;
+      }).join('');
+      form.querySelector('#dt-count').textContent = `(${dtSel.size} de ${dtOrder.length})`;
+    };
+    // ordem final = ordem da lista, só os marcados; todos marcados na ordem original = sem escolha
+    const dtPicked = () => {
+      const t = dtTable();
+      const out = dtOrder.filter(n => dtSel.has(n));
+      if (!out.length) return null;
+      const all = t.columns.map(c => c.name);
+      return out.length === all.length && out.every((n, k) => n === all[k]) ? null : out;
+    };
+    dtReset(dtTable(), base.table === (form.wtable ? form.wtable.value : PID) || !form.wtable ? base.fields : null);
+    dtRender();
+    form.wtable?.addEventListener('change', () => { dtReset(dtTable(), null); dtRender(); });
+    dtSearch.addEventListener('input', dtRender);
+    dtSearch.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+    form.querySelector('#dt-all').addEventListener('click', () => { dtOrder.forEach(n => { if (!dtSearch.value || n.toLowerCase().includes(dtSearch.value.trim().toLowerCase())) dtSel.add(n); }); dtRender(); });
+    form.querySelector('#dt-none').addEventListener('click', () => { dtOrder.forEach(n => { if (!dtSearch.value || n.toLowerCase().includes(dtSearch.value.trim().toLowerCase())) dtSel.delete(n); }); dtRender(); });
+    dtList.addEventListener('change', e => { const n = e.target.dataset.dtf; if (n === undefined) return; e.target.checked ? dtSel.add(n) : dtSel.delete(n); dtRender(); });
+    dtList.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      const k = +(b.dataset.dtup ?? b.dataset.dtdown), to = b.dataset.dtup !== undefined ? k - 1 : k + 1;
+      if (to < 0 || to >= dtOrder.length) return;
+      [dtOrder[k], dtOrder[to]] = [dtOrder[to], dtOrder[k]];
+      dtRender();
+    });
     refresh();
   }
 
