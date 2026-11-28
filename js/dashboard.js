@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName } from './parser.js?v=26';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=26';
-import { buildModel } from './model.js?v=26';
-import { ColTable } from './coltable.js?v=26';
+import { isCodeName, toNumber } from './parser.js?v=27';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=27';
+import { buildModel } from './model.js?v=27';
+import { ColTable } from './coltable.js?v=27';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -18,6 +18,7 @@ const MONTHS_FULL = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
 const GRAINS = { month: 'Mês', year: 'Ano', day: 'Dia' };
 export const TYPES = {
   kpi: { label: 'Indicador', icon: '123', h: 130 },
+  gauge: { label: 'Medidor', icon: '◠', h: 250 },
   bar: { label: 'Colunas', icon: '▮▮', h: 320 },
   hbar: { label: 'Barras', icon: '☰', h: 320 },
   line: { label: 'Linha', icon: '⟋', h: 300 },
@@ -25,6 +26,7 @@ export const TYPES = {
   pie: { label: 'Pizza', icon: '◕', h: 320 },
   doughnut: { label: 'Rosca', icon: '◎', h: 320 },
   table: { label: 'Tabela resumo', icon: '▤', h: 320 },
+  pivot: { label: 'Tabela dinâmica', icon: '⊞', h: 400 },
   datatable: { label: 'Tabela de dados', icon: '▦', h: 420 }
 };
 const GAP = 16;          // espaço entre os cartões (px)
@@ -311,7 +313,8 @@ function periodWindow(ref, period, compare) {
 
 function autoTitle(w, ds) {
   if (w.type === 'datatable') return 'Dados';
-  if (w.type === 'kpi') return measureLabel(w);
+  if (w.type === 'kpi' || w.type === 'gauge') return measureLabel(w);
+  if (w.type === 'pivot') return `${measureLabel(w)} por ${[w.dim, w.dim2].filter(Boolean).join(' / ') || '—'}${w.pcol ? ' × ' + w.pcol : ''}`;
   const dimCol = (COLUMNS.length ? COLUMNS : ds.columns).find(c => c.name === w.dim);
   const by = dimCol?.type === 'date' ? `${w.dim} (${GRAINS[w.grain || 'month'].toLowerCase()})` : w.dim;
   return `${measureLabel(w)} por ${by || '—'}`;
@@ -551,7 +554,78 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     const ctx = { state, stateNoDate: model.select(dateless.filters, cfg.dateCol) };
     cfg.widgets.forEach(w => fillWidget(w, rows, ctx));
     bindEvents();
+    bindViewTools();
   }
+
+  // ---------- tela cheia e exportar imagem / PDF ----------
+  const LIBS = {};
+  const loadLib = (url, global) => LIBS[url] || (LIBS[url] = new Promise((ok, fail) => {
+    const g = () => global.split('.').reduce((o, k) => o && o[k], window);
+    if (g()) return ok(g());
+    const sc = document.createElement('script');
+    sc.src = url; sc.onload = () => ok(g()); sc.onerror = () => { delete LIBS[url]; fail(new Error('Não foi possível carregar ' + url)); };
+    document.head.append(sc);
+  }));
+  const H2C = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  const JSPDF = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
+  const fileName = t => (t || 'grafico').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80);
+  async function snapWidget(sec) {
+    const html2canvas = await loadLib(H2C, 'html2canvas');
+    return html2canvas(sec, {
+      scale: 2, backgroundColor: '#ffffff', logging: false,
+      ignoreElements: n => n.classList && (n.classList.contains('w-tools') || n.classList.contains('w-resize') || n.classList.contains('export-menu'))
+    });
+  }
+  async function exportWidget(w, sec, kind) {
+    const title = w.title || autoTitle(w, ds);
+    try {
+      document.body.classList.add('busy');
+      const canvas = await snapWidget(sec);
+      if (kind === 'png') {
+        const a = document.createElement('a');
+        a.download = fileName(title) + '.png';
+        a.href = canvas.toDataURL('image/png');
+        a.click();
+      } else {
+        const { jsPDF } = await loadLib(JSPDF, 'jspdf');
+        const land = canvas.width >= canvas.height;
+        const pdf = new jsPDF({ orientation: land ? 'landscape' : 'portrait', unit: 'mm', format: 'a4' });
+        const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), m = 12;
+        pdf.setFontSize(9); pdf.setTextColor(120);
+        pdf.text(`${ds.name} · ${new Date().toLocaleString('pt-BR')}`, m, ph - 6);
+        const k = Math.min((pw - 2 * m) / canvas.width, (ph - 2 * m - 6) / canvas.height);
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', m, m, canvas.width * k, canvas.height * k);   // JPEG: arquivo bem menor
+        pdf.save(fileName(title) + '.pdf');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Não foi possível exportar agora. Verifique a internet e tente de novo.');
+    } finally { document.body.classList.remove('busy'); }
+  }
+  function bindViewTools() {
+    if (editing) return;
+    el.querySelectorAll('.widget[data-id]').forEach(sec => {
+      const w = allWidgets().find(x => x.id === sec.dataset.id);
+      if (!w) return;
+      sec.querySelector('[data-wv="full"]')?.addEventListener('click', () => {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (sec.requestFullscreen) sec.requestFullscreen().catch(() => sec.classList.toggle('w-max'));
+        else sec.classList.toggle('w-max');
+      });
+      sec.querySelector('[data-wv="export"]')?.addEventListener('click', e => {
+        e.stopPropagation();
+        document.querySelector('.export-menu')?.remove();
+        const menu = document.createElement('div');
+        menu.className = 'export-menu card';
+        menu.innerHTML = '<button data-x="png">🖼 Imagem (PNG)</button><button data-x="pdf">📄 PDF</button>';
+        sec.querySelector('.w-head').append(menu);
+        menu.querySelectorAll('[data-x]').forEach(b => b.addEventListener('click', ev => { ev.stopPropagation(); menu.remove(); exportWidget(w, sec, b.dataset.x); }));
+        setTimeout(() => document.addEventListener('click', () => menu.remove(), { once: true }), 0);
+      });
+    });
+  }
+  // ao entrar/sair da tela cheia, os gráficos se ajustam ao novo tamanho
+  document.addEventListener('fullscreenchange', () => { setTimeout(() => charts.forEach(c => c.resize()), 50); });
 
   function widgetHtml(w) {
     const title = w.title || autoTitle(w, ds);
@@ -564,7 +638,10 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
             <button data-w="edit" title="Editar gráfico">✎</button>
             <button data-w="dup" title="Duplicar">⧉</button>
             <button data-w="del" title="Excluir">🗑</button>
-          </div>` : ''}
+          </div>` : `<div class="w-tools w-view">
+            <button data-wv="full" title="Tela cheia">⛶</button>
+            <button data-wv="export" title="Exportar como imagem ou PDF">⤓</button>
+          </div>`}
         </header>
         <div class="w-body"></div>
         ${editing ? '<div class="w-resize" title="Arraste para redimensionar">◢</div>' : ''}
@@ -636,6 +713,25 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     if (bg) bg.style.backgroundSize = `${m.colW}px ${ROW * 4}px`;
   }
 
+  // meta do indicador/medidor: valor fixo ou outra medida (campo ou item mestre), com as seleções atuais
+  function targetOf(w, ctx) {
+    if (!w.target) return null;
+    if (w.target === '__value') {
+      const raw = String(w.targetValue ?? '').trim();
+      if (!raw) return null;
+      const x = /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : toNumber(raw);
+      return Number.isFinite(x) ? x : null;
+    }
+    const tw = { measure: w.target, agg: 'sum' };
+    const m = masterOf(tw);
+    if (m && compiledOf(m).error) return null;
+    const used = m ? compiledOf(m).fields : [w.target];
+    const tt = model.measureTable(used, null);
+    return tt ? valueOf(tt.t, ctx.state[tt.id], tw) : null;
+  }
+  const goalColor = p => p >= 1 ? '#16a34a' : p >= .8 ? '#f59e0b' : '#dc2626';
+  const pivotOpen = new Map();   // tabela dinâmica: grupos recolhidos (por gráfico)
+
   function fillWidget(w, rows, ctx) {  // rows: linhas da tabela principal; trocadas pela tabela da medida abaixo
     const body = el.querySelector(`.widget[data-id="${w.id}"] .w-body`);
     if (!body) return;
@@ -702,9 +798,42 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           sub = `<div class="kpi-compare"><span class="delta ${cls}">${deltaTxt}</span> vs ${esc(prev.label)} <span class="muted">(${esc(fv(w, pv, true))})</span></div>${sub}`;
         }
       }
+      const tgt = targetOf(w, ctx);
+      if (tgt !== null && tgt !== 0 && v !== null) {
+        const pct = v / tgt, diff = pct - 1;
+        sub += `<div class="kpi-goal">
+          <div class="goal-bar"><span style="width:${Math.min(100, Math.max(0, pct * 100))}%;background:${goalColor(pct)}"></span></div>
+          <div class="goal-txt"><span class="delta ${diff >= 0 ? 'up' : 'down'}">${diff >= 0 ? '▲' : '▼'} ${formatValue(Math.abs(diff), 'percent')}</span> ${diff >= 0 ? 'acima' : 'abaixo'} da meta <span class="muted">(${esc(fv(w, tgt, true))} · ${formatValue(pct, 'percent')} atingido)</span></div>
+        </div>`;
+      }
       body.innerHTML = `<div class="kpi-val" style="color:${color}" title="${esc(fv(w, v))}">${esc(fv(w, v, true))}</div>${sub}`;
       return;
     }
+
+    if (w.type === 'gauge') {
+      const v = valueOf(mt.t, rows, w);
+      const tgt = targetOf(w, ctx);
+      if (tgt === null || !tgt) { body.innerHTML = '<div class="muted center small">Defina a meta do medidor: Editar gráfico → Meta.</div>'; return; }
+      if (!window.Chart) { body.innerHTML = '<div class="muted center">Biblioteca de gráficos não carregou.</div>'; return; }
+      const pct = v === null ? 0 : v / tgt;
+      const fill = Math.max(0, Math.min(1, pct));
+      const gc = goalColor(pct);
+      body.innerHTML = `<div class="gauge">
+        <div class="chart-box"><canvas></canvas></div>
+        <div class="gauge-center"><div class="gauge-val" style="color:${gc}" title="${esc(fv(w, v))}">${esc(fv(w, v, true))}</div>
+          <div class="gauge-pct"><span class="delta ${pct >= 1 ? 'up' : 'down'}">${pct >= 1 ? '▲' : '▼'}</span> ${formatValue(pct, 'percent')} da meta</div></div>
+        <div class="gauge-scale"><span>0</span><span>Meta: ${esc(fv(w, tgt, true))}</span></div>
+      </div>`;
+      const chart = new Chart(body.querySelector('canvas'), {
+        type: 'doughnut',
+        data: { datasets: [{ data: [fill, 1 - fill], backgroundColor: [gc, '#e2e8f0'], borderWidth: 0 }] },
+        options: { maintainAspectRatio: false, rotation: -90, circumference: 180, cutout: '74%', events: [], plugins: { legend: { display: false }, tooltip: { enabled: false } } }
+      });
+      charts.set(w.id, chart);
+      return;
+    }
+
+    if (w.type === 'pivot') { fillPivot(w, body, mt, rows, ctx); return; }
     const dimCol = cols.find(c => c.name === w.dim);
     const g = groupData(mt.t, rows, w, dimCol, dimCol && !model.has(mt.id, w.dim) ? model.resolver(ctx.state, mt.id, w.dim) : null);
     if (!g.values.length) { body.innerHTML = '<div class="muted center">Sem dados para este filtro.</div>'; return; }
@@ -772,6 +901,93 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       });
     }
     charts.set(w.id, chart);
+  }
+
+  // ---------- tabela dinâmica: linhas (com sub-linhas e subtotais) × colunas ----------
+  function fillPivot(w, body, mt, rows, ctx) {
+    const grain = w.grain || 'month';
+    const keyer = name => {
+      if (!name) return null;
+      const c = cols.find(x => x.name === name);
+      if (!c) return null;
+      const vals = model.has(mt.id, name) ? (g => i => [g(i)])(mt.t.getter(name)) : model.resolver(ctx.state, mt.id, name);
+      const isDate = c.type === 'date';
+      return {
+        name, isDate,
+        keys: isDate ? i => vals(i).map(v => dateKey(v, grain)) : i => { const vs = vals(i); return vs.length ? vs.map(v => v ?? '(vazio)') : ['(sem ligação)']; },
+        label: k => isDate ? dateLabel(k, grain) : String(k)
+      };
+    };
+    const K1 = keyer(w.dim), K2 = keyer(w.dim2), KC = keyer(w.pcol);
+    if (!K1) { body.innerHTML = '<div class="muted center small">Escolha o campo das linhas.</div>'; return; }
+    const A = '\u0002', S = '\u0001';
+    const buckets = new Map(), kids = new Map(), colSet = new Set();
+    const put = (k, i) => { let a = buckets.get(k); if (!a) { a = []; buckets.set(k, a); } a.push(i); };
+    for (let j = 0; j < rows.length; j++) {
+      const i = rows[j];
+      const a1 = K1.keys(i), a2 = K2 ? K2.keys(i) : [A], ac = KC ? KC.keys(i) : [A];
+      const set = new Set();
+      for (const k1 of a1) {
+        if (!kids.has(k1)) kids.set(k1, new Set());
+        for (const k2 of a2) {
+          if (K2) kids.get(k1).add(k2);
+          for (const kc of ac) {
+            if (KC) colSet.add(kc);
+            set.add(k1 + S + k2 + S + kc); set.add(k1 + S + A + S + kc); set.add(k1 + S + k2 + S + A);
+            set.add(k1 + S + A + S + A); set.add(A + S + A + S + kc); set.add(A + S + A + S + A);
+          }
+        }
+      }
+      for (const k of set) put(k, i);
+    }
+    if (!kids.size) { body.innerHTML = '<div class="muted center">Sem dados para este filtro.</div>'; return; }
+    const cache = new Map();
+    const val = (k1, k2, kc) => {
+      const k = k1 + S + k2 + S + kc;
+      if (cache.has(k)) return cache.get(k);
+      const a = buckets.get(k);
+      const v = a ? valueOf(mt.t, Uint32Array.from(a), w) : null;
+      cache.set(k, v); return v;
+    };
+    const byLabel = (a, b) => String(a).localeCompare(String(b), 'pt-BR', { numeric: true });
+    const sort = w.sort || 'label';
+    const order = (list, total) => sort === 'label' ? list.sort(byLabel) : list.sort((a, b) => sort === 'asc' ? (total(a) ?? 0) - (total(b) ?? 0) : (total(b) ?? 0) - (total(a) ?? 0));
+    const MAXC = 40, MAX1 = 300, MAX2 = 200;
+    const allCols = KC ? [...colSet].sort(byLabel) : [];
+    const colKeys = allCols.slice(0, MAXC);
+    const l1 = order([...kids.keys()], k1 => val(k1, A, A));
+    const closed = pivotOpen.get(w.id) || new Set();
+    pivotOpen.set(w.id, closed);
+    const cells = (k1, k2) => (KC ? colKeys.map(kc => `<td class="number">${esc(fv(w, val(k1, k2, kc)))}</td>`).join('') : '') + `<td class="number pv-tot">${esc(fv(w, val(k1, k2, A)))}</td>`;
+    const head = `<tr><th>${esc(K1.name)}${K2 ? ` <span class="muted">/ ${esc(K2.name)}</span>` : ''}</th>${KC ? colKeys.map(kc => `<th class="number">${esc(KC.label(kc))}</th>`).join('') : ''}<th class="number">${KC ? 'Total' : esc(measureLabel(w))}</th></tr>`;
+    let html = '';
+    l1.slice(0, MAX1).forEach((k1, n) => {
+      const sub = K2 ? order([...kids.get(k1)], k2 => val(k1, k2, A)) : [];
+      const isClosed = closed.has(String(k1));
+      html += `<tr class="pv-l1 ${K2 ? 'pv-grp' : ''}" data-g="${n}">
+        <td>${K2 ? `<button type="button" class="pv-tog" data-g="${n}">${isClosed ? '▸' : '▾'}</button>` : ''}<span class="pv-lbl ${K1.isDate ? '' : 'clickable'}" data-f="1" data-key="${esc(k1)}">${esc(K1.label(k1))}</span>${K2 ? ` <small class="muted">(${sub.length})</small>` : ''}</td>${cells(k1, A)}</tr>`;
+      sub.slice(0, MAX2).forEach(k2 => {
+        html += `<tr class="pv-l2" data-p="${n}" ${isClosed ? 'hidden' : ''}><td><span class="pv-lbl ${K2.isDate ? '' : 'clickable'}" data-f="2" data-key="${esc(k2)}">${esc(K2.label(k2))}</span></td>${cells(k1, k2)}</tr>`;
+      });
+    });
+    html += `<tr class="pv-total"><td>Total geral</td>${cells(A, A)}</tr>`;
+    const notes = [l1.length > MAX1 ? `mostrando ${MAX1} de ${nf.format(l1.length)} linhas` : '', allCols.length > MAXC ? `mostrando ${MAXC} de ${allCols.length} colunas` : ''].filter(Boolean);
+    body.innerHTML = `${K2 ? '<div class="pv-tools"><button type="button" class="btn link" data-pv="open">Expandir tudo</button><button type="button" class="btn link" data-pv="close">Recolher tudo</button></div>' : ''}
+      <div class="table-wrap fill"><table class="pivot"><thead>${head}</thead><tbody>${html}</tbody></table></div>
+      ${notes.length ? `<div class="muted small">${notes.join(' · ')}</div>` : ''}`;
+    const keysByIdx = l1.slice(0, MAX1).map(String);
+    const setOpen = (n, open) => {
+      const k = keysByIdx[n];
+      if (open) closed.delete(k); else closed.add(k);
+      body.querySelectorAll(`tr[data-p="${n}"]`).forEach(tr => { tr.hidden = !open; });
+      const b = body.querySelector(`.pv-tog[data-g="${n}"]`); if (b) b.textContent = open ? '▾' : '▸';
+    };
+    body.querySelectorAll('.pv-tog').forEach(b => b.addEventListener('click', () => setOpen(+b.dataset.g, closed.has(keysByIdx[+b.dataset.g]))));
+    body.querySelectorAll('[data-pv]').forEach(b => b.addEventListener('click', () => keysByIdx.forEach((_, n) => setOpen(n, b.dataset.pv === 'open'))));
+    body.querySelectorAll('.pv-lbl.clickable').forEach(sp => sp.addEventListener('click', () => {
+      if (editing) return;
+      toggleFilter(sp.dataset.f === '1' ? K1.name : K2.name, sp.dataset.key);
+    }));
   }
 
   function toggleFilter(col, value) {
@@ -990,6 +1206,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : '') + tableHint(c), c.name === base.dim)).join('')
       + (numCols.length ? `<optgroup label="Campos numéricos (ex.: Ano, Mês)">${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.dim)).join('')}</optgroup>` : '');
     const textMeasures = cols.filter(c => c.type !== 'number');
+    function dimOptsFor(sel) {
+      return cols.filter(c => c.type !== 'number').map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : '') + tableHint(c), c.name === sel)).join('')
+        + (numCols.length ? `<optgroup label="Campos numéricos (ex.: Ano, Mês)">${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === sel)).join('')}</optgroup>` : '');
+    }
+    const targetOpts = opt('', 'Sem meta', !base.target) + opt('__value', 'Valor fixo…', base.target === '__value')
+      + (cfg.masters.length ? `<optgroup label="Itens mestres">${cfg.masters.map(m => opt('m:' + m.id, 'ƒ ' + m.name, base.target === 'm:' + m.id)).join('')}</optgroup>` : '')
+      + (numCols.length ? `<optgroup label="Soma de um campo (ex.: tabela de metas)">${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.target)).join('')}</optgroup>` : '');
     const body = `
       <div class="type-picker">${Object.entries(TYPES).map(([k, t]) => `
         <label class="type-opt"><input type="radio" name="type" value="${k}" ${k === base.type ? 'checked' : ''}>
@@ -998,6 +1221,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       <label class="field"><span>Título do gráfico</span><input name="wtitle" value="${esc(base.title)}" placeholder="${esc(autoTitle(base, ds))}"></label>
       <div class="form-grid">
         <label class="field" data-show="dim"><span>Analisar por</span><select name="dim">${dimOpts}</select></label>
+        <label class="field" data-show="dim2"><span>Sub-linhas <small class="muted">(opcional, com subtotal)</small></span><select name="dim2">${opt('', '— nenhuma —', !base.dim2)}${dimOptsFor(base.dim2)}</select></label>
+        <label class="field" data-show="pcol"><span>Colunas <small class="muted">(opcional)</small></span><select name="pcol">${opt('', '— nenhuma —', !base.pcol)}${dimOptsFor(base.pcol)}</select></label>
         <label class="field" data-show="grain"><span>Agrupar data por</span><select name="grain">${Object.entries(GRAINS).map(([k, v]) => opt(k, v, k === (base.grain || 'month'))).join('')}</select></label>
         <label class="field" data-show="measure"><span>Medida</span><select name="measure">
           ${cfg.masters.length ? `<optgroup label="Itens mestres">${cfg.masters.map(m => opt('m:' + m.id, 'ƒ ' + m.name, base.measure === 'm:' + m.id)).join('')}</optgroup>` : ''}
@@ -1016,6 +1241,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           <ul class="dt-list" id="dt-list"></ul>
           <small class="muted">Marque os campos que quer ver. Use ↑ ↓ para mudar a ordem das colunas.</small>
         </div>
+        <label class="field" data-show="target"><span>Meta</span><select name="target">${targetOpts}</select></label>
+        <label class="field" data-show="targetValue"><span>Valor da meta</span><input name="targetValue" inputmode="decimal" value="${esc(base.targetValue ?? '')}" placeholder="Ex.: 1.500.000"></label>
         <label class="field" data-show="agg"><span>Cálculo</span><select name="agg">${Object.entries(AGG).map(([k, v]) => opt(k, v, k === base.agg)).join('')}</select></label>
         <label class="field" data-show="top"><span>Mostrar</span><select name="top">
           ${[[0, 'Todos os itens'], [5, 'Top 5'], [10, 'Top 10'], [15, 'Top 15'], [20, 'Top 20'], [30, 'Top 30'], [50, 'Top 50']].map(([v, l]) => opt(v, l, +base.top === v)).join('')}</select></label>
@@ -1043,7 +1270,11 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
         format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
         table: form.wtable ? form.wtable.value : PID,
-        fields: t === 'datatable' ? dtPicked() : base.fields
+        fields: t === 'datatable' ? dtPicked() : base.fields,
+        dim2: t === 'pivot' ? (form.dim2.value || null) : base.dim2,
+        pcol: t === 'pivot' ? (form.pcol.value || null) : base.pcol,
+        target: ['kpi', 'gauge'].includes(t) ? (form.target.value || null) : base.target,
+        targetValue: ['kpi', 'gauge'].includes(t) ? form.targetValue.value.trim() : base.targetValue
       };
       if (isNew) {
         w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
@@ -1054,7 +1285,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         cfg.widgets[cfg.widgets.findIndex(x => x.id === existing.id)] = w;
       }
       // indicador com período/comparação precisa de mais altura para as linhas extras
-      const minGh = t === 'kpi' ? (w.compare && w.compare !== 'none' ? 18 : (w.period && w.period !== 'all') ? 16 : 0) : 0;
+      const kpiBase = w.compare && w.compare !== 'none' ? 18 : (w.period && w.period !== 'all') ? 16 : 0;
+      const minGh = t === 'kpi' ? (w.target ? Math.max(kpiBase, 15) + 6 : kpiBase) : t === 'gauge' ? 20 : 0;
       if (minGh && (w.gh || 0) < minGh) { w.gh = minGh; resolve(w); }
       markDirty(); draw();
     });
@@ -1067,9 +1299,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       [...form.agg.options].forEach(o => { o.disabled = txt && !['count', 'countd'].includes(o.value); });
       if (txt && !['count', 'countd'].includes(form.agg.value)) form.agg.value = 'countd';
       const dimCol = cols.find(c => c.name === form.dim.value);
+      const isDateF = n => cols.find(c => c.name === n)?.type === 'date';
       const show = {
-        dim: !['kpi', 'datatable'].includes(t),
-        grain: !['kpi', 'datatable'].includes(t) && dimCol?.type === 'date',
+        dim: !['kpi', 'gauge', 'datatable'].includes(t),
+        dim2: t === 'pivot', pcol: t === 'pivot',
+        target: t === 'kpi' || t === 'gauge',
+        targetValue: (t === 'kpi' || t === 'gauge') && form.target.value === '__value',
+        grain: !['kpi', 'gauge', 'datatable'].includes(t) && (dimCol?.type === 'date' || (t === 'pivot' && (isDateF(form.dim2.value) || isDateF(form.pcol.value)))),
         measure: t !== 'datatable',
         agg: t !== 'datatable' && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
         format: t !== 'datatable',
@@ -1077,12 +1313,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         fields: t === 'datatable',
         period: t === 'kpi' && !!cfg.dateCol,
         compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
-        top: !['kpi', 'datatable'].includes(t),
-        sort: !['kpi', 'datatable'].includes(t),
-        color: !['datatable', 'table'].includes(t),
-        labels: !['kpi', 'datatable', 'table'].includes(t)
+        top: !['kpi', 'gauge', 'datatable', 'pivot'].includes(t),
+        sort: !['kpi', 'gauge', 'datatable'].includes(t),
+        color: !['datatable', 'table', 'pivot', 'gauge'].includes(t),
+        labels: !['kpi', 'gauge', 'datatable', 'table', 'pivot'].includes(t)
       };
       form.querySelectorAll('[data-show]').forEach(f => (f.hidden = !show[f.dataset.show]));
+      form.querySelector('[data-show="dim"] > span').textContent = t === 'pivot' ? 'Linhas' : 'Analisar por';
       const preview = {
         type: t, dim: form.dim.value, grain: form.grain.value, measure: form.measure.value,
         agg: aggFor(form.measure.value, form.agg.value)
@@ -1092,6 +1329,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     form.labels.addEventListener('change', () => (form.labels.dataset.touched = '1'));
     form.querySelectorAll('input[name=type]').forEach(r => r.addEventListener('change', () => {
       if (!form.labels.dataset.touched) form.labels.value = defaultLabels(form.type.value);
+      if (form.type.value === 'pivot' && !existing?.sort) form.sort.value = 'label';
     }));
     form.querySelectorAll('input[name=type], select').forEach(x => x.addEventListener('change', () => {
       // ao escolher uma data em "Analisar por", ordena cronologicamente

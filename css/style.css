@@ -544,3 +544,50 @@ textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--primary); }
 .dt-move button { border: 1px solid var(--line); background: #fff; border-radius: 6px; width: 24px; height: 22px; cursor: pointer; font-size: 12px; line-height: 1; color: var(--text); }
 .dt-move button:disabled { opacity: .3; cursor: default; }
 .dt-move button:not(:disabled):hover { border-color: var(--primary); color: var(--primary); }
+
+/* ---------- tela cheia e exportar ---------- */
+.w-tools.w-view { opacity: 0; transition: opacity .15s; }
+.widget:hover .w-tools.w-view, .widget:focus-within .w-tools.w-view, .widget:fullscreen .w-tools.w-view { opacity: 1; }
+.w-head { position: relative; }
+.export-menu { position: absolute; right: 0; top: 100%; z-index: 30; margin: 0; padding: .3rem; display: flex; flex-direction: column; min-width: 160px; box-shadow: 0 10px 30px rgba(15, 23, 42, .15); }
+.export-menu button { text-align: left; background: none; border: 0; padding: .45rem .6rem; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; color: var(--text); }
+.export-menu button:hover { background: #eff6ff; color: var(--primary); }
+.widget:fullscreen { background: #fff; padding: 1.5rem 2rem; border-radius: 0; display: flex; flex-direction: column; }
+.widget:fullscreen .w-head h3 { font-size: 20px; }
+.widget:fullscreen .w-body { flex: 1; min-height: 0; }
+.widget:fullscreen .kpi-val { font-size: 72px; }
+.widget.w-max { position: fixed !important; inset: 0 !important; width: auto !important; height: auto !important; z-index: 200; background: #fff; padding: 1.5rem 2rem; display: flex; flex-direction: column; }
+.widget.w-max .w-body { flex: 1; min-height: 0; }
+body.busy, body.busy * { cursor: progress !important; }
+
+/* ---------- indicador com meta ---------- */
+.kpi-goal { margin-top: .4rem; }
+.goal-bar { height: 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+.goal-bar span { display: block; height: 100%; border-radius: 999px; transition: width .3s; }
+.goal-txt { font-size: 12px; margin-top: .3rem; }
+
+/* ---------- medidor ---------- */
+.gauge { position: relative; height: 100%; display: flex; flex-direction: column; }
+.gauge .chart-box { flex: 1; min-height: 0; }
+.gauge-center { position: absolute; left: 0; right: 0; bottom: 30px; text-align: center; pointer-events: none; }
+.gauge-val { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.gauge-pct { font-size: 13px; color: var(--muted); }
+.gauge-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 0 6%; }
+.widget:fullscreen .gauge-val { font-size: 56px; }
+
+/* ---------- tabela dinâmica ---------- */
+.pivot { border-collapse: collapse; width: 100%; font-size: 13px; }
+.pivot th { position: sticky; top: 0; background: #f8fafc; z-index: 1; }
+.pivot td, .pivot th { padding: .35rem .6rem; border-bottom: 1px solid #eef2f7; white-space: nowrap; }
+.pivot .pv-l1 td { font-weight: 600; }
+.pivot .pv-grp td { background: #f8fafc; }
+.pivot .pv-l2 td:first-child { padding-left: 2rem; }
+.pivot .pv-tot { background: #f1f5f9; font-weight: 600; }
+.pivot .pv-total td { font-weight: 700; background: #e0ecff; border-top: 2px solid #bfdbfe; position: sticky; bottom: 0; }
+.pv-tog { border: 0; background: none; cursor: pointer; width: 18px; padding: 0; color: var(--muted); font-size: 12px; }
+.pv-lbl.clickable { cursor: pointer; }
+.pv-lbl.clickable:hover { color: var(--primary); text-decoration: underline; }
+.pv-tools { display: flex; gap: .75rem; margin: -.25rem 0 .25rem; font-size: 12px; }
+.w-pivot .w-body { display: flex; flex-direction: column; }
+.w-pivot .table-wrap.fill { flex: 1; min-height: 0; }
+.widget:fullscreen .gauge, .widget.w-max .gauge { width: min(100%, 900px); margin: 0 auto; }
