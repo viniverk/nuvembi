@@ -681,3 +681,4 @@ body.busy, body.busy * { cursor: progress !important; }
 .app-menu hr { border: 0; border-top: 1px solid var(--line); margin: .25rem 0; }
 .sp-mini { font-style: normal; font-size: 10px; color: var(--muted); }
 .sp-chip.on .sp-mini { color: #dbeafe; }
+.dt-tools select { min-width: 0; max-width: 45%; padding: .35rem .5rem; }

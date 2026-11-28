@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName, toNumber } from './parser.js?v=32';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=32';
-import { buildModel } from './model.js?v=32';
-import { ColTable } from './coltable.js?v=32';
+import { isCodeName, toNumber } from './parser.js?v=33';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=33';
+import { buildModel } from './model.js?v=33';
+import { ColTable } from './coltable.js?v=33';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -1381,6 +1381,10 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         <div class="field dt-fields" data-show="fields">
           <span><span id="dt-title">Campos da tabela</span> <small class="muted" id="dt-count"></small></span>
           <div class="dt-tools">
+            ${model.multi ? `<select id="dt-table" title="Mostrar os campos de uma tabela">
+              <option value="all">Todas as tabelas</option>
+              ${model.tables.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}
+              <option value="sel">✓ Só os selecionados</option></select>` : ''}
             <input type="search" id="dt-search" placeholder="Buscar campo…">
             <button type="button" class="btn ghost small" id="dt-all">Todos</button>
             <button type="button" class="btn ghost small" id="dt-none">Nenhum</button>
@@ -1498,16 +1502,27 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       dtOrder = keep.length ? [...keep, ...names.filter(n => !keep.includes(n))] : names;
       dtSel = new Set(keep.length ? keep : emptyDefault || names);
     };
-    const dtList = form.querySelector('#dt-list'), dtSearch = form.querySelector('#dt-search');
+    const dtList = form.querySelector('#dt-list'), dtSearch = form.querySelector('#dt-search'), dtTableSel = form.querySelector('#dt-table');
+    // campo aparece na lista? (busca + tabela escolhida + "só os selecionados")
+    const dtVisible = n => {
+      const q = dtSearch.value.trim().toLowerCase();
+      if (q && !fieldLabel(n).toLowerCase().includes(q)) return false;
+      const tf = dtTableSel?.value || 'all';
+      if (tf === 'all') return true;
+      if (tf === 'sel') return dtSel.has(n);
+      const c = dtSource().columns.find(x => x.name === n);
+      return !!c?.tables?.includes(tf);
+    };
     const dtRender = () => {
       const t = dtSource();
       form.querySelector('#dt-title').textContent = isFP() ? 'Campos do filtro' : model.multi ? 'Campos (de qualquer tabela)' : 'Campos da tabela';
-      const q = dtSearch.value.trim().toLowerCase();
-      dtList.innerHTML = dtOrder.map((n, k) => {
+      const visIdx = dtOrder.map((n, k) => dtVisible(n) ? k : -1).filter(k => k >= 0);
+      dtList.innerHTML = (visIdx.length ? '' : '<li class="muted small">Nenhum campo aqui.</li>') + dtOrder.map((n, k) => {
         const c = t.columns.find(x => x.name === n);
-        return `<li ${q && !n.toLowerCase().includes(q) ? 'hidden' : ''} class="${dtSel.has(n) ? 'on' : ''}">
+        const pos = visIdx.indexOf(k);
+        return `<li ${pos < 0 ? 'hidden' : ''} class="${dtSel.has(n) ? 'on' : ''}">
           <label><input type="checkbox" data-dtf="${esc(n)}" ${dtSel.has(n) ? 'checked' : ''}> ${esc(fieldLabel(n))}${model.multi && c?.tables ? ` <small class="muted">${esc(c.tables.map(id => model.byId[id].name).join(', '))}</small>` : ''} <i class="tag ${c?.type}">${c?.type === 'number' ? 'número' : c?.type === 'date' ? 'data' : 'texto'}</i></label>
-          <span class="dt-move"><button type="button" data-dtup="${k}" ${k ? '' : 'disabled'} title="Subir">↑</button><button type="button" data-dtdown="${k}" ${k < dtOrder.length - 1 ? '' : 'disabled'} title="Descer">↓</button></span>
+          <span class="dt-move"><button type="button" data-dtup="${k}" ${pos > 0 ? '' : 'disabled'} title="Subir">↑</button><button type="button" data-dtdown="${k}" ${pos >= 0 && pos < visIdx.length - 1 ? '' : 'disabled'} title="Descer">↓</button></span>
         </li>`;
       }).join('');
       form.querySelector('#dt-count').textContent = `(${dtSel.size} de ${dtOrder.length})`;
@@ -1538,12 +1553,17 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     form.wtable?.addEventListener('change', () => { dtReset(dtTable(), null); dtRender(); });
     dtSearch.addEventListener('input', dtRender);
     dtSearch.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
-    form.querySelector('#dt-all').addEventListener('click', () => { dtOrder.forEach(n => { if (!dtSearch.value || n.toLowerCase().includes(dtSearch.value.trim().toLowerCase())) dtSel.add(n); }); dtRender(); });
-    form.querySelector('#dt-none').addEventListener('click', () => { dtOrder.forEach(n => { if (!dtSearch.value || n.toLowerCase().includes(dtSearch.value.trim().toLowerCase())) dtSel.delete(n); }); dtRender(); });
+    dtTableSel?.addEventListener('change', dtRender);
+    // Todos / Nenhum valem só para os campos que estão aparecendo
+    form.querySelector('#dt-all').addEventListener('click', () => { dtOrder.filter(dtVisible).forEach(n => dtSel.add(n)); dtRender(); });
+    form.querySelector('#dt-none').addEventListener('click', () => { dtOrder.filter(dtVisible).forEach(n => dtSel.delete(n)); dtRender(); });
     dtList.addEventListener('change', e => { const n = e.target.dataset.dtf; if (n === undefined) return; e.target.checked ? dtSel.add(n) : dtSel.delete(n); dtRender(); });
     dtList.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
-      const k = +(b.dataset.dtup ?? b.dataset.dtdown), to = b.dataset.dtup !== undefined ? k - 1 : k + 1;
+      // troca com o vizinho VISÍVEL (pula os campos escondidos pela busca/tabela)
+      const k = +(b.dataset.dtup ?? b.dataset.dtdown), step = b.dataset.dtup !== undefined ? -1 : 1;
+      let to = k + step;
+      while (to >= 0 && to < dtOrder.length && !dtVisible(dtOrder[to])) to += step;
       if (to < 0 || to >= dtOrder.length) return;
       [dtOrder[k], dtOrder[to]] = [dtOrder[to], dtOrder[k]];
       dtRender();
