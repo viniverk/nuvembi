@@ -19,8 +19,8 @@
 //            comentários //, /* */ e REM.
 //  Roda inteiro no navegador sobre as tabelas colunares (ColTable).
 // =============================================================
-import { ColTable } from './coltable.js?v=21';
-import { toNumber, toISODate } from './parser.js?v=21';
+import { ColTable } from './coltable.js?v=22';
+import { toNumber, toISODate } from './parser.js?v=22';
 
 export class ScriptError extends Error {
   constructor(msg, line) { super(msg); this.line = line; }
@@ -532,6 +532,13 @@ export function runScript(src, sources /* { nome: ColTable } */, opts = {}) {
       return this._exists.get(field);
     }
   };
+  // depuração: lê só as primeiras N linhas de cada fonte
+  const limitCache = new Map();
+  const limited = s => {
+    if (!opts.limit || s.t.n <= opts.limit) return s.t;
+    if (!limitCache.has(s.name)) limitCache.set(s.name, s.t.slice(opts.limit));
+    return limitCache.get(s.name);
+  };
   const srcByName = new Map();
   for (const [name, t] of Object.entries(sources || {})) {
     srcByName.set(name.toLowerCase(), { name, t });
@@ -603,6 +610,8 @@ export function runScript(src, sources /* { nome: ColTable } */, opts = {}) {
       run._exists = null;
       if (c.eatOp(';')) continue;
       lastLine = c.peek().line;
+      // depuração: para antes do comando que começa depois da linha escolhida
+      if (opts.stopLine && c.peek().line > opts.stopLine) { log.push({ kind: 'info', text: `Depuração parada na linha ${opts.stopLine}: os comandos seguintes não foram executados.` }); break; }
       expandUntilSemicolon();
       const line = c.peek().line;
       const st = performance.now();
@@ -724,7 +733,7 @@ export function runScript(src, sources /* { nome: ColTable } */, opts = {}) {
         while (c.isOp(':') || c.isOp('/') || (c.peek().type === 'id' && c.peek().start === c.t[c.p - 1].end)) raw += c.next().v;
         if (c.isOp('(')) { let depth = 0; do { if (c.isOp('(')) depth++; if (c.isOp(')')) depth--; c.next(); } while (depth > 0 && c.peek().type !== 'eof'); }
         const s = findSource(raw, t.line);
-        input = s.t; inputName = s.name;
+        input = limited(s); inputName = s.name;
       } else if (c.eatKw('resident')) {
         const nm = findTable(nameTok('o nome da tabela'), line);
         input = tables.get(nm); inputName = nm;
@@ -869,7 +878,8 @@ export function runScript(src, sources /* { nome: ColTable } */, opts = {}) {
   }
   if (!list.length) log.push({ kind: 'warn', text: 'O script terminou sem nenhuma tabela.' });
   const total = performance.now() - t0;
-  log.push({ kind: 'done', text: `Carga concluída: ${list.length} tabela(s) em ${total < 1000 ? Math.round(total) + ' ms' : (total / 1000).toFixed(1).replace('.', ',') + ' s'}.` });
+  if (opts.limit) log.unshift({ kind: 'info', text: `Depuração: lendo no máximo ${opts.limit.toLocaleString('pt-BR')} linhas de cada fonte. Nada é salvo no app.` });
+  log.push({ kind: 'done', text: `${opts.limit || opts.stopLine ? 'Depuração concluída' : 'Carga concluída'}: ${list.length} tabela(s) em ${total < 1000 ? Math.round(total) + ' ms' : (total / 1000).toFixed(1).replace('.', ',') + ' s'}.` });
   return { ok: true, tables: list, log, ms: total };
 }
 

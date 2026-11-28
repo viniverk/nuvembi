@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=21';
-import { createStore, ROLES } from './store.js?v=21';
-import { readFile, normalizeRows } from './parser.js?v=21';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=21';
-import { buildModel } from './model.js?v=21';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=21';
-import { ColTable } from './coltable.js?v=21';
-import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=21';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=22';
+import { createStore, ROLES } from './store.js?v=22';
+import { readFile, normalizeRows } from './parser.js?v=22';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=22';
+import { buildModel } from './model.js?v=22';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=22';
+import { ColTable } from './coltable.js?v=22';
+import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=22';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1044,11 +1044,20 @@ async function showScriptEditor(id) {
         <div class="se-bar">
           ${edit ? '<button class="btn" id="se-run" title="Ctrl+Enter">▶ Carregar dados</button>' : ''}
           ${edit ? `<button class="btn ghost" id="se-gen">✨ Gerar script das fontes</button>` : ''}
+          <button class="btn ghost" id="se-dbgbtn" title="Testar o script com poucas linhas, sem salvar">🐞 Depurar</button>
           <button class="btn ghost" id="se-helpbtn">? Ajuda</button>
           ${edit && saved ? '<button class="btn ghost danger" id="se-off">Desativar script</button>' : ''}
           <span class="muted small" id="se-status">${draft !== null && draft !== saved ? '✎ Rascunho não carregado (restaurado deste navegador)' : saved ? '✓ Script carregado' : 'Sem script: o app usa as fontes como estão'}</span>
         </div>
         <div class="se-help card" id="se-help" hidden>${SCRIPT_HELP}</div>
+        <div class="se-debug card" id="se-debug" hidden>
+          <strong>🐞 Depuração</strong>
+          <label>Linhas de cada fonte
+            <select id="dbg-limit"><option value="10">10</option><option value="100" selected>100</option><option value="1000">1.000</option><option value="10000">10.000</option><option value="0">Todas</option></select></label>
+          <label class="check-inline"><input type="checkbox" id="dbg-stop"> Parar na linha do cursor <span class="muted small" id="dbg-line"></span></label>
+          <button class="btn small" id="dbg-run" title="Ctrl+Shift+Enter">▶ Executar depuração</button>
+          <span class="muted small">Não salva nada: o app continua com a última carga.</span>
+        </div>
         <div class="se-editor">
           <pre class="se-gutter" id="se-gutter" aria-hidden="true"></pre>
           <textarea id="se-text" spellcheck="false" autocomplete="off" autocapitalize="off" ${edit ? '' : 'readonly'} placeholder="${edit ? 'Escreva o script de carga aqui ou clique em ✨ Gerar script das fontes.' : 'Este app não tem script.'}">${esc(initial)}</textarea>
@@ -1081,6 +1090,7 @@ async function showScriptEditor(id) {
   };
   ta.addEventListener('keydown', e => {
     if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) { e.preventDefault(); insert('    '); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); view.querySelector('#se-debug').hidden = false; debugRun(); return; }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
   });
   view.querySelectorAll('[data-insfield]').forEach(b => b.addEventListener('click', () => insert(b.dataset.insfield)));
@@ -1092,6 +1102,36 @@ async function showScriptEditor(id) {
     insert(pre + defaultScript([{ name: t.name, columns: t.columns }]).split('\n').filter(l => !l.startsWith('//')).join('\n').replace(/^\n+/, ''));
   }));
   view.querySelector('#se-helpbtn').addEventListener('click', () => { const h = view.querySelector('#se-help'); h.hidden = !h.hidden; });
+  view.querySelector('#se-dbgbtn').addEventListener('click', () => { const d = view.querySelector('#se-debug'); d.hidden = !d.hidden; if (!d.hidden) showCursorLine(); });
+  const cursorLine = () => ta.value.slice(0, ta.selectionStart).split('\n').length;
+  const showCursorLine = () => { view.querySelector('#dbg-line').textContent = `(linha ${cursorLine()})`; };
+  ['keyup', 'click'].forEach(ev => ta.addEventListener(ev, showCursorLine));
+  // depuração: roda com poucas linhas e mostra uma amostra de cada tabela, sem salvar
+  function debugRun() {
+    const limit = +view.querySelector('#dbg-limit').value;
+    const stopLine = view.querySelector('#dbg-stop').checked ? cursorLine() : 0;
+    const res = runScript(ta.value, sourcesOf(ds, data), { limit, stopLine });
+    showLog(res, res.tables.length ? previewHtml(res.tables) : '');
+    bindPreview();
+    if (!res.ok && res.line) goLine(res.line);
+    status.textContent = res.ok ? '🐞 Depuração concluída (nada foi salvo)' : '✖ Erro na depuração';
+  }
+  const fmtCell = (v, type) => v === null || v === undefined ? '<span class="null">—</span>' : type === 'number' ? (Number.isInteger(v) ? String(v) : v.toLocaleString('pt-BR', { maximumFractionDigits: 6 })) : esc(String(v));
+  const previewHtml = tables => `
+    <div class="dbg-preview">
+      <div class="dbg-tabs">${tables.map((o, k) => `<button type="button" class="${k === 0 ? 'active' : ''}" data-dbgt="${k}">${esc(o.name)} <small>${nf.format(o.t.n)}</small></button>`).join('')}</div>
+      ${tables.map((o, k) => `
+        <div class="dbg-table table-wrap" data-dbgp="${k}" ${k ? 'hidden' : ''}>
+          <table><thead><tr>${o.t.columns.map(c => `<th title="${c.type}">${esc(c.name)}<small>${c.type === 'number' ? 'número' : c.type === 'date' ? 'data' : 'texto'}</small></th>`).join('')}</tr></thead>
+          <tbody>${Array.from({ length: Math.min(o.t.n, 50) }, (_, i) => `<tr>${o.t.columns.map(c => `<td class="${c.type}">${fmtCell(o.t.get(c.name, i), c.type)}</td>`).join('')}</tr>`).join('')}</tbody></table>
+          ${o.t.n > 50 ? `<p class="muted small">Mostrando 50 de ${nf.format(o.t.n)} linhas.</p>` : ''}
+        </div>`).join('')}
+    </div>`;
+  const bindPreview = () => logEl.querySelectorAll('[data-dbgt]').forEach(b => b.addEventListener('click', () => {
+    logEl.querySelectorAll('[data-dbgt]').forEach(x => x.classList.toggle('active', x === b));
+    logEl.querySelectorAll('[data-dbgp]').forEach(p => { p.hidden = p.dataset.dbgp !== b.dataset.dbgt; });
+  }));
+  view.querySelector('#dbg-run').addEventListener('click', debugRun);
   view.querySelector('#se-gen')?.addEventListener('click', () => {
     if (!sources.length) { toast('Adicione tabelas no Gerenciador de dados primeiro.', 'err'); return; }
     if (ta.value.trim() && !confirm('Substituir o script atual por um script novo, gerado a partir das fontes?')) return;
