@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=31';
-import { createStore, ROLES } from './store.js?v=31';
-import { readFile, normalizeRows } from './parser.js?v=31';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=31';
-import { buildModel } from './model.js?v=31';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=31';
-import { ColTable } from './coltable.js?v=31';
-import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=31';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=32';
+import { createStore, ROLES } from './store.js?v=32';
+import { readFile, normalizeRows } from './parser.js?v=32';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=32';
+import { buildModel } from './model.js?v=32';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=32';
+import { ColTable } from './coltable.js?v=32';
+import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=32';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -27,11 +27,11 @@ async function refreshSpaces() { try { spaces = await store.listSpaces(); } catc
 const myUid = () => store.me?.uid;
 const mySpaceRole = sp => sp?.roles?.[myUid()] || null;
 const spaceById = id => spaces.find(x => x.id === id);
-const spaceName = id => id ? (spaceById(id)?.name || 'Espaço restrito') : 'Geral';
+const spaceName = id => id ? (spaceById(id)?.name || 'Espaço restrito') : 'Sem espaço';
 // app da área Geral: vale o papel na empresa; app num espaço: admin da empresa ou "editor" do espaço
 const canEditApp = ds => !ds?.spaceId ? canEdit() : isAdmin() || mySpaceRole(spaceById(ds.spaceId)) === 'editor';
 // onde a pessoa pode criar/mover apps
-const writableSpaces = () => [...(canEdit() ? [{ id: '', name: 'Geral' }] : []), ...spaces.filter(sp => isAdmin() || mySpaceRole(sp) === 'editor')];
+const writableSpaces = () => [...(canEdit() ? [{ id: '', name: 'Sem espaço (toda a empresa vê)' }] : []), ...spaces.filter(sp => isAdmin() || mySpaceRole(sp) === 'editor')];
 const canCreate = () => writableSpaces().length > 0;
 const spaceSelect = (name, selected) => {
   const opts = writableSpaces();
@@ -285,53 +285,114 @@ async function showHome() {
     view.querySelector('[data-newapp]')?.addEventListener('click', openNewApp);
     return;
   }
-  // barra de espaços (Todos · Geral · cada espaço) e apps agrupados por espaço
+  // barra de espaços: Todos + os espaços criados; cartões do mesmo tamanho, com capa
   let filter = currentSpaceFilter();
-  if (filter !== 'all' && filter !== 'general' && !spaceById(filter)) filter = 'all';
-  const groups = [{ id: '', name: 'Geral', apps: list.filter(d => !d.spaceId) },
-    ...spaces.map(sp => ({ id: sp.id, name: sp.name, sp, apps: list.filter(d => d.spaceId === sp.id) })),
-    ...[...new Set(list.filter(d => d.spaceId && !spaceById(d.spaceId)).map(d => d.spaceId))].map(id => ({ id, name: 'Espaço restrito', apps: list.filter(d => d.spaceId === id) }))];
-  const shown = groups.filter(g => filter === 'all' ? g.apps.length : (filter === 'general' ? g.id === '' : g.id === filter));
-  const roleTag = g => !g.id ? '' : isAdmin() ? '<span class="sp-role">admin</span>' : `<span class="sp-role">${mySpaceRole(g.sp) === 'editor' ? 'edita' : 'visualiza'}</span>`;
+  if (filter !== 'all' && !spaceById(filter)) filter = 'all';
+  const shown = filter === 'all' ? list : list.filter(d => d.spaceId === filter);
   const spaceBar = spaces.length ? `<div class="space-bar">
       <button type="button" class="sp-chip ${filter === 'all' ? 'on' : ''}" data-spf="all">Todos <small>${list.length}</small></button>
-      ${groups.map(g => `<button type="button" class="sp-chip ${(g.id ? filter === g.id : filter === 'general') ? 'on' : ''}" data-spf="${g.id || 'general'}">${g.id ? '▣ ' : ''}${esc(g.name)} <small>${g.apps.length}</small></button>`).join('')}
+      ${spaces.map(sp => `<button type="button" class="sp-chip ${filter === sp.id ? 'on' : ''}" data-spf="${esc(sp.id)}">▣ ${esc(sp.name)} <small>${list.filter(d => d.spaceId === sp.id).length}</small>${!isAdmin() ? ` <i class="sp-mini">${mySpaceRole(sp) === 'editor' ? 'edita' : 'vê'}</i>` : ''}</button>`).join('')}
     </div>` : '';
-  view.innerHTML = `${invitesBanner}${spaceBar}${shown.map(g => `
-    ${spaces.length ? `<h2 class="space-title">${g.id ? '▣ ' : ''}${esc(g.name)} ${roleTag(g)} <small class="muted">${g.apps.length} app(s)</small></h2>` : ''}
-    ${g.apps.length ? '' : `<div class="card muted small space-empty">Nenhum app neste espaço ainda.${writableSpaces().some(o => o.id === g.id) ? ' Use + Novo app ou mova um app para cá.' : ''}</div>`}
-    <div class="grid">${g.apps.map(d => `
-    <article class="ds card">
-      <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : d.source === 'qvd' ? 'QVD' : d.source === 'app' ? 'APP' : 'XLS'}</span>
-        <div><h3>${esc(d.name)}</h3><small>${new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</small></div>
-        ${d.shareId ? '<span class="badge ok shared-badge" title="Tem link público ativo">🔗 Link ativo</span>' : ''}</div>
-      <p class="muted">${nf.format((d.rowCount || 0) + (d.tables || []).reduce((t, x) => t + (x.rowCount || 0), 0))} linhas · ${(d.columns.length ? 1 : 0) + (d.tables || []).length} tabela(s)${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
-      <div class="tags">${d.columns.slice(0, 5).map(c => `<span class="tag ${c.type}">${esc(c.name)}</span>`).join('')}${d.columns.length > 5 ? `<span class="tag">+${d.columns.length - 5}</span>` : ''}</div>
-      <div class="ds-actions">
-        <a class="btn small" href="#/painel/${encodeURIComponent(d.id)}">Abrir app</a>
-        ${canEditApp(d) ? `<a class="btn ghost small" href="#/dados/${encodeURIComponent(d.id)}">🗄 Dados</a>` : ''}
-        ${canEditApp(d) && spaces.length && writableSpaces().length > 1 ? `<button class="btn ghost small" data-move="${esc(d.id)}" title="Mover para outro espaço">↪ Espaço</button>` : ''}
-        ${canEditApp(d) ? `<button class="btn ghost small danger" data-del="${esc(d.id)}" data-name="${esc(d.name)}">Excluir</button>` : ''}
+  const srcLabel = d => d.source === 'csv' ? 'CSV' : d.source === 'qvd' ? 'QVD' : d.source === 'app' ? 'APP' : 'XLS';
+  const hue = t => [...String(t)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
+  const rowsOf = d => (d.rowCount || 0) + (d.tables || []).reduce((t, x) => t + (x.rowCount || 0), 0);
+  const nTables = d => ((d.columns || []).length ? 1 : 0) + (d.tables || []).length;
+  const appCard = d => {
+    const open = `#/painel/${encodeURIComponent(d.id)}`;
+    const cover = d.cover
+      ? `style="background-image:url('${d.cover}')"`
+      : `style="background:linear-gradient(135deg, hsl(${hue(d.name)} 70% 55%), hsl(${(hue(d.name) + 40) % 360} 70% 42%))"`;
+    return `
+    <article class="ds card" data-app="${esc(d.id)}">
+      <a class="ds-cover ${d.cover ? 'has-img' : ''}" href="${open}" ${cover} title="Abrir ${esc(d.name)}">
+        ${d.cover ? '' : `<span class="ds-cover-ic">${srcLabel(d)}</span>`}
+        ${d.shareId ? '<span class="ds-badge" title="Tem link público ativo">🔗 Link ativo</span>' : ''}
+      </a>
+      <div class="ds-body">
+        <h3 title="${esc(d.name)}"><a href="${open}">${esc(d.name)}</a></h3>
+        <p class="ds-meta">${nf.format(rowsOf(d))} linhas · ${nTables(d)} tabela(s)</p>
+        <p class="ds-meta muted">${d.updatedAt ? 'Atualizado em ' + new Date(d.updatedAt).toLocaleDateString('pt-BR') : 'Criado em ' + new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</p>
+        ${d.spaceId && spaces.length ? `<span class="ds-space">▣ ${esc(spaceName(d.spaceId))}</span>` : ''}
       </div>
-    </article>`).join('')}</div>`).join('')}`;
+      <div class="ds-actions">
+        <a class="btn small" href="${open}">Abrir</a>
+        ${canEditApp(d) ? `<a class="btn ghost small" href="#/dados/${encodeURIComponent(d.id)}">🗄 Dados</a>` : ''}
+        ${canEditApp(d) ? `<button type="button" class="btn ghost small ds-more" data-more="${esc(d.id)}" title="Mais opções">⋯</button>` : ''}
+      </div>
+    </article>`;
+  };
+  view.innerHTML = `${invitesBanner}${spaceBar}
+    ${shown.length ? `<div class="grid app-grid">${shown.map(appCard).join('')}</div>`
+      : `<div class="card muted space-empty">Nenhum app neste espaço ainda.${writableSpaces().some(o => o.id === filter) ? ' Use + Novo app ou mova um app para cá pelo menu ⋯.' : ''}</div>`}`;
+  view.querySelectorAll('[data-more]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); appMenu(b, list.find(d => d.id === b.dataset.more)); }));
   view.querySelectorAll('[data-spf]').forEach(b => b.addEventListener('click', () => { try { sessionStorage.setItem('nbi-space', b.dataset.spf); } catch {} showHome(); }));
-  view.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', () => openMoveApp(list.find(d => d.id === b.dataset.move))));
 
-  view.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`Excluir o app "${b.dataset.name}" e todos os seus dados? Isso não pode ser desfeito.`)) return;
-    b.disabled = true;
-    try { await store.deleteDataset(b.dataset.del); rowsCache.delete(b.dataset.del); toast('App excluído.'); showHome(); }
-    catch (e) { console.error(e); toast('Erro ao excluir.', 'err'); b.disabled = false; }
-  }));
+
+
   bindInviteButtons(view);
   view.querySelectorAll('[data-refresh]').forEach(b => b.addEventListener('click', () => openRefresh(list.find(d => d.id === b.dataset.refresh))));
+}
+
+// menu ⋯ do cartão: imagem, mover de espaço, excluir
+function appMenu(anchor, d) {
+  document.querySelector('.app-menu')?.remove();
+  const m = document.createElement('div');
+  m.className = 'app-menu card';
+  m.innerHTML = `
+    <button data-am="img">🖼 ${d.cover ? 'Trocar imagem' : 'Adicionar imagem'}</button>
+    ${d.cover ? '<button data-am="noimg">✕ Remover imagem</button>' : ''}
+    ${spaces.length && writableSpaces().length > 1 ? '<button data-am="move">↪ Mover de espaço</button>' : ''}
+    <hr><button data-am="del" class="danger">🗑 Excluir app</button>`;
+  document.body.append(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.top = (r.bottom + 4 + window.scrollY) + 'px';
+  m.style.left = Math.max(8, Math.min(r.right - 200, window.innerWidth - 210)) + 'px';
+  const close = () => { m.remove(); document.removeEventListener('mousedown', out, true); };
+  const out = e => { if (!m.contains(e.target)) close(); };
+  setTimeout(() => document.addEventListener('mousedown', out, true), 0);
+  m.querySelector('[data-am="img"]').addEventListener('click', () => { close(); pickCover(d); });
+  m.querySelector('[data-am="noimg"]')?.addEventListener('click', async () => {
+    close();
+    try { await store.setCover(d.id, null); toast('Imagem removida.'); showHome(); } catch (e) { console.error(e); toast('Não foi possível remover a imagem.', 'err'); }
+  });
+  m.querySelector('[data-am="move"]')?.addEventListener('click', () => { close(); openMoveApp(d); });
+  m.querySelector('[data-am="del"]').addEventListener('click', async () => {
+    close();
+    if (!confirm(`Excluir o app "${d.name}" e todos os seus dados? Isso não pode ser desfeito.`)) return;
+    try { await store.deleteDataset(d.id); rowsCache.delete(d.id); toast('App excluído.'); showHome(); }
+    catch (e) { console.error(e); toast('Erro ao excluir.', 'err'); }
+  });
+}
+// imagem do cartão: recorta no formato do cartão (16:9) e reduz para ~60 KB
+function pickCover(d) {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*';
+  inp.addEventListener('change', async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    try {
+      const img = await createImageBitmap(f);
+      const W = 640, H = 360;
+      const k = Math.max(W / img.width, H / img.height);
+      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const g = cv.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+      g.drawImage(img, (W - img.width * k) / 2, (H - img.height * k) / 2, img.width * k, img.height * k);
+      let url = cv.toDataURL('image/jpeg', 0.82);
+      if (url.length > 300000) url = cv.toDataURL('image/jpeg', 0.6);
+      await store.setCover(d.id, url);
+      toast('Imagem do cartão salva.');
+      showHome();
+    } catch (e) { console.error(e); toast('Não foi possível usar essa imagem.', 'err'); }
+  });
+  inp.click();
 }
 
 // espaço sugerido para um app novo: o espaço aberto na tela inicial (se a pessoa pode criar nele)
 function defaultSpaceForNew() {
   const f = currentSpaceFilter();
   const w = writableSpaces();
-  const id = f === 'general' || f === 'all' ? '' : f;
+  const id = f === 'all' ? '' : f;
   return w.some(o => o.id === id) ? id : (w[0]?.id || '');
 }
 
@@ -353,7 +414,7 @@ async function openSpaces() {
       <div class="modal card modal-wide">
         <header><h2>▣ Espaços</h2><button type="button" class="x" data-close>×</button></header>
         <div class="modal-body">
-          <p class="muted">Agrupe os apps em espaços (ex.: Comercial, Compras, Diretoria) e escolha quem participa de cada um. Quem não participa <strong>não vê</strong> os apps do espaço. Apps fora de espaços ficam em <strong>Geral</strong>, visíveis para toda a empresa.</p>
+          <p class="muted">Agrupe os apps em espaços (ex.: Comercial, Compras, Diretoria) e escolha quem participa de cada um. Quem não participa <strong>não vê</strong> os apps do espaço. Apps sem espaço aparecem em <strong>Todos</strong> para toda a empresa.</p>
           <form class="sp-new"><input name="spname" maxlength="40" placeholder="Nome do novo espaço (ex.: Comercial)" required><button class="btn">+ Criar espaço</button></form>
           ${spaces.length ? spaces.map(sp => `
             <section class="sp-card">
@@ -378,7 +439,7 @@ async function openSpaces() {
     }));
     back.querySelectorAll('[data-spdel]').forEach(b => b.addEventListener('click', async () => {
       const sp = spaceById(b.dataset.spdel);
-      if (!confirm(`Excluir o espaço "${sp.name}"? Os apps dele voltam para Geral (visíveis para toda a empresa).`)) return;
+      if (!confirm(`Excluir o espaço "${sp.name}"? Os apps dele ficam sem espaço (visíveis para toda a empresa).`)) return;
       try { await store.deleteSpace(sp.id); await refreshSpaces(); rowsCache.clear(); toast('Espaço excluído.'); paint(); }
       catch (err) { spaceError(err); }
     }));

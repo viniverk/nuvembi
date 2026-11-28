@@ -15,7 +15,7 @@
 //  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
-import { ColTable, pack, unpack } from './coltable.js?v=31';
+import { ColTable, pack, unpack } from './coltable.js?v=32';
 
 const FB = '10.12.2';
 const BIN = 900_000;   // bytes por documento (limite do Firestore: 1 MB)
@@ -240,6 +240,7 @@ async function createFirebaseStore(config) {
         : { ['roles.' + uid]: F.deleteField(), memberUids: F.arrayRemove(uid) });
     },
     async moveApp(dsId, spaceId) { await F.updateDoc(dsDoc(dsId), { spaceId: spaceId || null, updatedAt: now(), updatedBy: me.email }); },
+    async setCover(dsId, cover) { await F.updateDoc(dsDoc(dsId), { cover: cover || F.deleteField() }); },   // imagem do cartão (JPEG pequeno em data URL)
     // app vazio: as tabelas entram depois pelo Gerenciador de dados
     async createApp(name, spaceId) {
       const ref = F.doc(dsCol());
@@ -519,6 +520,13 @@ function createLocalStore() {
       if (role) { sp.roles[uid] = role; sp.memberUids = [...new Set([...(sp.memberUids || []), uid])]; }
       else { delete sp.roles[uid]; sp.memberUids = (sp.memberUids || []).filter(u => u !== uid); }
       await set('spaces:' + org.id, m);
+    },
+    async setCover(dsId, cover) {
+      await needEditApp(dsId);
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === dsId);
+      if (cover) ds.cover = cover; else delete ds.cover;
+      await set('datasets:' + org.id, list);
     },
     async moveApp(dsId, spaceId) {
       await needEditApp(dsId); await needWrite(spaceId);

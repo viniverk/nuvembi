@@ -8,7 +8,7 @@
 //  - Um gráfico pode usar a dimensão de uma tabela e a medida de
 //    outra: o valor da dimensão é encontrado seguindo as ligações.
 // =============================================================
-import { ColTable } from './coltable.js?v=31';
+import { ColTable } from './coltable.js?v=32';
 
 export const keyOf = v => (v === null || v === undefined) ? '' : String(v);
 
