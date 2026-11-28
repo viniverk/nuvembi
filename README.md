@@ -77,7 +77,7 @@ Entre com qualquer e-mail e uma senha de 6+ caracteres, vá em **Importar dados*
 
 **Por que um agente local?** Protheus e SAP normalmente ficam no servidor da empresa, fechados para a
 internet. Em vez de abrir o banco para fora (arriscado), um pequeno programa roda dentro da rede do cliente
-e *envia* os dados para a nuvem — o mesmo modelo do Qlik Data Gateway e do Power BI Gateway.
+e *envia* os dados para a nuvem — o mesmo modelo dos gateways de dados das grandes ferramentas de BI.
 
 ## Atualizações e cache do navegador
 Os arquivos são carregados com um número de versão (`?v=5` no `index.html` e nos `import` do `js/app.js`).
@@ -85,7 +85,7 @@ Ao publicar uma mudança, aumente esse número nos dois lugares para que todos r
 
 ## Editor de script
 
-Cada app tem um **Editor de script** parecido com o script de carga do Qlik. As tabelas do *Gerenciador de dados* são as **fontes**; o script monta as tabelas do modelo:
+Cada app tem um **Editor de script** para preparar os dados antes da análise. As tabelas do *Gerenciador de dados* são as **fontes**; o script monta as tabelas do modelo:
 
 ```
 Vendas:

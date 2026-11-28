@@ -1,5 +1,5 @@
 // =============================================================
-//  Modelo associativo (várias tabelas ligadas, como no Qlik)
+//  Modelo associativo (várias tabelas ligadas pelos campos de mesmo nome)
 //  — versão colunar: cada tabela é uma ColTable e as seleções são
 //  listas de posições de linha (Uint32Array).
 //
@@ -8,7 +8,7 @@
 //  - Um gráfico pode usar a dimensão de uma tabela e a medida de
 //    outra: o valor da dimensão é encontrado seguindo as ligações.
 // =============================================================
-import { ColTable } from './coltable.js?v=20';
+import { ColTable } from './coltable.js?v=21';
 
 export const keyOf = v => (v === null || v === undefined) ? '' : String(v);
 

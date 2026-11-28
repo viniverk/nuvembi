@@ -1,5 +1,5 @@
 // =============================================================
-//  Leitor de arquivos .qvd (Qlik) — roda no navegador
+//  Leitor de arquivos .qvd — roda no navegador
 //
 //  Estrutura do arquivo:
 //   1) cabeçalho XML <QvdTableHeader> terminado por \r\n\0
@@ -9,7 +9,7 @@
 //
 //  Tipos de símbolo: 1 = inteiro 4 bytes | 2 = double 8 bytes | 4 = texto
 //                    5 = inteiro + texto (dual) | 6 = double + texto (dual)
-//  Datas do Qlik são números (dias desde 30/12/1899) e viram aaaa-mm-dd.
+//  Datas no QVD são números (dias desde 30/12/1899) e viram aaaa-mm-dd.
 // =============================================================
 
 const unescapeXml = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&');

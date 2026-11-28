@@ -1,5 +1,5 @@
 // =============================================================
-//  Fórmulas de itens mestres (no estilo das expressões do Qlik)
+//  Fórmulas de itens mestres (Sum, Avg, Count… com campos entre colchetes)
 //
 //  Exemplos:
 //    Sum([Valor_Total])

@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName } from './parser.js?v=20';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=20';
-import { buildModel } from './model.js?v=20';
-import { ColTable } from './coltable.js?v=20';
+import { isCodeName } from './parser.js?v=21';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=21';
+import { buildModel } from './model.js?v=21';
+import { ColTable } from './coltable.js?v=21';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -358,7 +358,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   let cfg = clone(saved);
   let editing = false;
 
-  // ---------- pastas (abas), como no Qlik: cada pasta tem seus gráficos; seleções valem para todas ----------
+  // ---------- pastas (abas): cada pasta tem seus gráficos; seleções valem para todas ----------
   const ensureSheets = c => {
     if (!c.sheets || !c.sheets.length) c.sheets = [{ id: uid(), name: 'Pasta 1', widgets: c.widgets || [] }];
     delete c.widgets;
@@ -386,7 +386,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   saved.masters = saved.masters || [];
   saved.filters = normFilters(saved.filters);
 
-  // ---------- seleções (estilo Qlik): histórico para voltar/avançar ----------
+  // ---------- seleções: histórico para voltar/avançar ----------
   let history = [], future = [];
   const fieldLabel = c => c === '__year' ? 'Ano' : c === '__month' ? 'Mês' : c;
   const valueLabel = (c, v) => c === '__month' ? (MONTHS_FULL[+v - 1] || v) : v;
@@ -777,7 +777,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     setFilters({ ...cfg.filters, [col]: next });
   }
 
-  // lista de valores de um campo (como a listbox do Qlik)
+  // lista de valores de um campo (listbox)
   function openListbox(c, anchor) {
     document.querySelector('.listbox')?.remove();
     const box = document.createElement('div');
@@ -982,7 +982,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       measure: mainMeasure, agg: mainMeasure === '__count' ? 'count' : 'sum',
       top: 10, sort: 'desc', color: 0
     };
-    // qualquer campo pode ser dimensão (como no Qlik); números (Ano, Mês…) ficam num grupo à parte
+    // qualquer campo pode ser dimensão; números (Ano, Mês…) ficam num grupo à parte
     const dimOpts = cols.filter(c => c.type !== 'number')
       .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : '') + tableHint(c), c.name === base.dim)).join('')
       + (numCols.length ? `<optgroup label="Campos numéricos (ex.: Ano, Mês)">${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.dim)).join('')}</optgroup>` : '');
@@ -1090,7 +1090,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   function manageMasters() {
     const usedBy = id => allWidgets().filter(w => w.measure === 'm:' + id).length;
     const body = `
-      <p class="muted">Medidas com nome que você cria uma vez e usa em qualquer gráfico, como no Qlik. Ex.: <code>Faturamento</code>, <code>Ticket médio</code>, <code>% da meta</code>.</p>
+      <p class="muted">Medidas com nome que você cria uma vez e usa em qualquer gráfico. Ex.: <code>Faturamento</code>, <code>Ticket médio</code>, <code>% da meta</code>.</p>
       <div class="master-list">${cfg.masters.map(m => {
         const c = compile(m.expr, cols);
         return `<div class="master-item">

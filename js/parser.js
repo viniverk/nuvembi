@@ -8,7 +8,7 @@
 // =============================================================
 
 const DATE_HINT = /(^|_)(data|dt|emis|emissao|venc|vencto|vencimento|dtdigit|entrega)|data|^dt/i;
-// nomes de campos que são códigos (nunca somados): Protheus, fiscais (NF-e, CFOP, CST…) e chaves do Qlik (%Chave)
+// nomes de campos que são códigos (nunca somados): Protheus, fiscais (NF-e, CFOP, CST…) e chaves com % no início (%Chave)
 const CODE_WORDS = new Set(['cod', 'codigo', 'id', 'cnpj', 'cpf', 'cep', 'filial', 'fil', 'nota', 'doc', 'documento', 'nf', 'nfe', 'serie',
   'pedido', 'num', 'numero', 'nro', 'nr', 'no', 'docto', 'dcto', 'titulo', 'parcela', 'prefixo', 'matricula', 'registro', 'protocolo', 'loja', 'tel', 'fone', 'chave', 'cfop', 'ncm', 'cst', 'csosn', 'sit', 'situacao', 'tes', 'cest', 'ean', 'gtin', 'sku', 'lote', 'item', 'conta', 'cc']);
 export const isCodeName = name => {
@@ -17,7 +17,7 @@ export const isCodeName = name => {
   return words.some(w => CODE_WORDS.has(w));
 };
 
-import { parseQVD } from './qvd.js?v=20';
+import { parseQVD } from './qvd.js?v=21';
 
 // ---------- leitura do arquivo ----------
 export async function readFile(file, { maxRows = Infinity } = {}) {
@@ -25,7 +25,7 @@ export async function readFile(file, { maxRows = Infinity } = {}) {
   if (file.size > 600 * 1024 * 1024) throw new Error('Arquivo maior que 600 MB — grande demais para abrir no navegador.');
   const buf = await file.arrayBuffer();
 
-  // QVD do Qlik: já vem com tipos (números, datas e textos)
+  // QVD: já vem com tipos (números, datas e textos)
   if (name.endsWith('.qvd')) {
     const q = parseQVD(buf, { maxRows });
     const t = buildTable([q.header, ...q.rows]);

@@ -1,5 +1,5 @@
 // =============================================================
-//  Editor de script (parecido com o script de carga do Qlik)
+//  Editor de script (script de carga do app)
 //
 //  As tabelas adicionadas no Gerenciador de dados são as FONTES.
 //  O script lê as fontes e monta as tabelas do modelo:
@@ -19,8 +19,8 @@
 //            comentários //, /* */ e REM.
 //  Roda inteiro no navegador sobre as tabelas colunares (ColTable).
 // =============================================================
-import { ColTable } from './coltable.js?v=20';
-import { toNumber, toISODate } from './parser.js?v=20';
+import { ColTable } from './coltable.js?v=21';
+import { toNumber, toISODate } from './parser.js?v=21';
 
 export class ScriptError extends Error {
   constructor(msg, line) { super(msg); this.line = line; }
@@ -842,7 +842,7 @@ export function runScript(src, sources /* { nome: ColTable } */, opts = {}) {
         logT(`${target} ← CONCATENATE`, res, ms());
         continue;
       }
-      // concatenação automática (mesmos campos de uma tabela já carregada), como no Qlik
+      // concatenação automática (mesmos campos de uma tabela já carregada)
       if (!noconcat) {
         const sig = out.cols.map(x => x.name).sort().join('\u0001');
         const same = [...tables].find(([, t]) => t.cols.map(x => x.name).sort().join('\u0001') === sig);
@@ -1057,7 +1057,7 @@ function groupLoad(input, specs, whereNode, groupBy, ctx) {
     const fn = compile(s.node, gctx);
     return buildColumn(s.name, typeOf(s.node, ctx), G, fn);
   });
-  // LOAD só com agregações e sem linhas: Qlik devolve 1 linha; aqui também
+  // LOAD só com agregações e sem linhas: devolve 1 linha
   return new ColTable(G, cols);
 }
 
@@ -1066,7 +1066,7 @@ export function defaultScript(sources /* [{ name, columns }] */) {
   const q = s => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : `[${s}]`;
   const lines = [
     '// Script de carga do app — cada LOAD cria uma tabela do modelo.',
-    '// As tabelas se ligam pelos campos com o mesmo nome (como no Qlik).',
+    '// As tabelas se ligam pelos campos com o mesmo nome.',
     '// Clique em ▶ Carregar dados para rodar.',
     ''
   ];

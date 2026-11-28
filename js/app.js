@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=20';
-import { createStore, ROLES } from './store.js?v=20';
-import { readFile, normalizeRows } from './parser.js?v=20';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=20';
-import { buildModel } from './model.js?v=20';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=20';
-import { ColTable } from './coltable.js?v=20';
-import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=20';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=21';
+import { createStore, ROLES } from './store.js?v=21';
+import { readFile, normalizeRows } from './parser.js?v=21';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=21';
+import { buildModel } from './model.js?v=21';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=21';
+import { ColTable } from './coltable.js?v=21';
+import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=21';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -154,7 +154,7 @@ function showLogin() {
   <div class="login">
     <section class="login-hero">
       <div class="brand big"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
-      <h1>Seus dados do ERP, do Qlik e do Excel em apps de BI prontos, na nuvem.</h1>
+      <h1>Seus dados do ERP, de planilhas e de arquivos QVD em apps de BI prontos, na nuvem.</h1>
       <ul class="bullets">
         <li>Importe planilhas Excel e CSV em segundos</li>
         <li>Apps com várias tabelas, pastas e editor de script</li>
@@ -587,7 +587,7 @@ function openAddTable(ds, data, existing = null) {
       </table></div>
       <div class="refresh-summary">
         ${st.links.length ? `<div class="ok-text">🔗 Liga ao modelo por: ${st.links.map(x => esc(x.f.name)).join(', ')}</div>` : '<div class="warn-text">⚠ Nenhum campo com o mesmo nome de outra tabela: esta tabela vai ficar solta (as seleções não a filtram). Renomeie a coluna-chave para o nome usado no app, por exemplo "Vendedor".</div>'}
-        ${st.multi.length ? `<div class="warn-text">⚠ Liga com ${esc(st.multi.join(', '))} por mais de um campo. Isso pode gerar resultados inesperados (no Qlik vira "chave sintética"). Prefira um campo-chave só: renomeie os outros.</div>` : ''}
+        ${st.multi.length ? `<div class="warn-text">⚠ Liga com ${esc(st.multi.join(', '))} por mais de um campo. Isso pode gerar resultados inesperados (chave sintética). Prefira um campo-chave só: renomeie os outros.</div>` : ''}
         ${st.dup.length ? `<div class="error">Nomes repetidos: ${esc([...new Set(st.dup)].join(', '))}</div>` : ''}
         ${st.empty ? '<div class="error">Todo campo precisa de um nome.</div>' : ''}
       </div>`;
@@ -636,9 +636,9 @@ function showUpload() {
         <input type="file" id="file" accept=".xlsx,.xls,.xlsm,.csv,.txt,.qvd" hidden>
         <div class="drop-icon">⇪</div>
         <strong>Arraste sua planilha aqui ou clique para escolher</strong>
-        <span class="muted">Excel (.xlsx, .xls), CSV ou QVD do Qlik · até ${nf.format(MAX_ROWS)} linhas · a primeira linha deve ter os títulos</span>
+        <span class="muted">Excel (.xlsx, .xls), CSV ou QVD · até ${nf.format(MAX_ROWS)} linhas · a primeira linha deve ter os títulos</span>
       </label>
-      <p class="muted tip">Dica: já usa Qlik? Envie direto os <strong>.qvd</strong> que suas cargas geram. Também dá para exportar uma consulta do Protheus ou SAP para Excel. Datas no formato aaaammdd (ex.: D2_EMISSAO) são reconhecidas automaticamente.</p>
+      <p class="muted tip">Dica: já tem arquivos <strong>.qvd</strong>? Envie direto, eles vêm com os tipos certos. Também dá para exportar uma consulta do Protheus ou SAP para Excel. Datas no formato aaaammdd (ex.: D2_EMISSAO) são reconhecidas automaticamente.</p>
     </div>
     <div id="preview"></div>`);
 
@@ -720,7 +720,7 @@ async function handleFile(file) {
           <label class="field grow"><span>Nome do app</span><input id="ds-name" value="${esc(sheets.length > 1 ? `${baseName} - ${sheet.name}` : baseName)}"></label>
           ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="sheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         </div>
-        <p class="muted">${nf.format(sheet.total || sheet.data.length)} linhas · ${sheet.columns.length} colunas${sheet.total ? ' · arquivo QVD do Qlik' : ''}. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
+        <p class="muted">${nf.format(sheet.total || sheet.data.length)} linhas · ${sheet.columns.length} colunas${sheet.total ? ' · arquivo QVD' : ''}. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
         ${tooMany && !sumOn ? `<p class="error">Este plano aceita até ${nf.format(MAX_ROWS)} linhas por tabela e o arquivo tem ${nf.format(total)}. Resuma os dados abaixo para usar o arquivo inteiro — sem resumir, só as primeiras ${nf.format(MAX_ROWS)} linhas serão importadas.</p>` : ''}
         <div class="cols-bar">
           <strong class="${nOn ? '' : 'error'}">${nOn} de ${nAll} colunas selecionadas</strong>
@@ -858,7 +858,7 @@ const scriptErrorCard = (ds, m) => `
     ${canEdit() ? `<a class="btn" href="#/script/${encodeURIComponent(ds.id)}">Abrir o Editor de script</a>` : '<p class="muted">Peça para quem edita o app corrigir o script.</p>'}
   </div>`;
 
-// navegação do app, como no Qlik: Analisar (pastas) · Preparar (gerenciador de dados, editor de script)
+// navegação do app: Analisar (pastas) · Preparar (gerenciador de dados, editor de script)
 function appNav(view, ds, active) {
   const id = encodeURIComponent(ds.id);
   const link = (key, href, label) => `<a href="${href}" class="${active === key ? 'active' : ''}">${label}</a>`;
@@ -921,7 +921,7 @@ async function showDataManager(id) {
 
   view.innerHTML = `
     <div class="dm-head">
-      <p class="muted">As tabelas do app se ligam pelos <strong>campos com o mesmo nome</strong> (🔑), como no Qlik. Adicione quantas quiser: Excel, CSV ou QVD.</p>
+      <p class="muted">As tabelas do app se ligam pelos <strong>campos com o mesmo nome</strong> (🔑). Adicione quantas quiser: Excel, CSV ou QVD.</p>
       ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar dados</button>' : ''}
     </div>
     ${sm.result ? `<div class="card script-note ${sm.error ? 'bad' : ''}">📝 ${sm.error
@@ -1362,7 +1362,7 @@ function showConnectors() {
   shell('connectors', 'Conectores', `
     <div class="grid">
       ${card('XLS', 'Excel / CSV', 'Ativo', 'ok', 'Importe planilhas .xlsx, .xls e .csv (separador ; ou ,). Números e datas no padrão brasileiro são reconhecidos.')}
-      ${card('QVD', 'Arquivos QVD (Qlik)', 'Ativo', 'ok', 'Envie os .qvd gerados pelas suas cargas do Qlik Sense/QlikView. Números, datas e códigos com zero à esquerda vêm com o tipo certo, sem precisar exportar para Excel.')}
+      ${card('QVD', 'Arquivos QVD', 'Ativo', 'ok', 'Envie arquivos .qvd direto, sem converter. Números, datas e códigos com zero à esquerda vêm com o tipo certo, sem precisar exportar para Excel.')}
       ${card('TOTVS', 'Protheus (SQL Server)', 'Fase 2', 'warn', 'Um agente instalado no servidor da empresa lê as tabelas (SD2, SF2, SB1, SB2…) e envia os dados para a nuvem em horários agendados.')}
       ${card('SAP', 'SAP ECC / S/4HANA', 'Fase 3', 'muted', 'Integração via OData ou extração por agente local, com o mesmo modelo de envio agendado.')}
       ${card('G', 'Google Planilhas', 'Fase 2', 'warn', 'Conexão direta com uma planilha do Google, atualizando o app automaticamente.')}

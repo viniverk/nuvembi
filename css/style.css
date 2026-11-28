@@ -216,7 +216,7 @@ table.summary tr.clickable:hover td { background: #f8fafc; }
 .check small { width: 100%; padding-left: 1.6rem; margin-top: -.2rem; }
 @media (max-width: 600px) { .form-grid, .check-list { grid-template-columns: 1fr; } }
 
-/* ---------- barra de seleções atuais (estilo Qlik) ---------- */
+/* ---------- barra de seleções atuais ---------- */
 .sel-bar { display: flex; align-items: center; gap: .75rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: .45rem .6rem; margin-bottom: 1rem; position: sticky; top: 0; z-index: 20; box-shadow: var(--shadow); min-height: 52px; }
 .sel-nav { display: flex; gap: .25rem; padding-right: .6rem; border-right: 1px solid var(--line); }
 .sel-nav button { width: 34px; height: 34px; border: 1px solid var(--line); background: #fff; border-radius: 8px; cursor: pointer; font-size: 16px; color: var(--text); }

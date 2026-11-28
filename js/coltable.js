@@ -1,5 +1,5 @@
 // =============================================================
-//  Tabela colunar (como o QVD / o motor do Qlik)
+//  Tabela colunar comprimida (dicionário de valores + códigos por linha)
 //
 //  Em memória:
 //   - texto e data: dicionário de valores distintos + códigos por linha
