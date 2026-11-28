@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName, toNumber } from './parser.js?v=34';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=34';
-import { buildModel } from './model.js?v=34';
-import { ColTable } from './coltable.js?v=34';
+import { isCodeName, toNumber } from './parser.js?v=35';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=35';
+import { buildModel } from './model.js?v=35';
+import { ColTable } from './coltable.js?v=35';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -1012,10 +1012,16 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     if (!fields.length) { body.innerHTML = '<div class="muted center small">Escolha os campos do painel: Editar → ✎ no painel → Campos.</div>'; return; }
     // sem espaço para as listas abertas: cada campo vira uma linha compacta que abre a lista (como no Qlik)
     const W = body.clientWidth || 300, H = body.clientHeight || 300;
-    const perRow = Math.max(1, Math.min(fields.length, Math.floor((W + 10) / 170)));
+    // disposição escolhida na edição: automática, em linha, em coluna ou grade com N por linha
+    const layout = w.fpLayout || 'auto';
+    const autoPerRow = Math.max(1, Math.min(fields.length, Math.floor((W + 10) / 170)));
+    const perRow = layout === 'row' ? fields.length : layout === 'column' ? 1 : layout === 'grid' ? Math.min(fields.length, +w.fpCols || 3) : autoPerRow;
     const rowsN = Math.ceil(fields.length / perRow);
-    if ((H - (rowsN - 1) * 10) / rowsN < 120) {
-      body.innerHTML = `<div class="fp-compact">${fields.map(c => {
+    const style = w.fpStyle || 'auto';
+    const compact = style === 'compact' || (style === 'auto' && (H - (rowsN - 1) * 10) / rowsN < 120);
+    const gridCols = layout === 'auto' ? (compact ? '1fr' : 'repeat(auto-fit, minmax(160px, 1fr))') : `repeat(${perRow}, minmax(0, 1fr))`;
+    if (compact) {
+      body.innerHTML = `<div class="fp-compact ${layout === 'row' || perRow > 1 ? 'fp-across' : ''}" style="grid-template-columns:${gridCols}">${fields.map(c => {
         const sel = cfg.filters[c] || [];
         const txt = !sel.length ? 'Todos' : sel.length === 1 ? valueLabel(c, sel[0]) : `${sel.length} de ${nf.format(allValues(c).length)}`;
         return `<button type="button" class="fp-pill ${sel.length ? 'on' : ''}" data-field="${esc(c)}"><strong>${esc(fieldLabel(c))}</strong><span>${esc(txt)}</span><i>▾</i></button>`;
@@ -1023,7 +1029,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       body.querySelectorAll('.fp-pill').forEach(b => b.addEventListener('click', () => openListbox(b.dataset.field, b)));
       return;
     }
-    body.innerHTML = `<div class="fp">${fields.map((c, n) => {
+    body.innerHTML = `<div class="fp" style="grid-template-columns:${gridCols}">${fields.map((c, n) => {
       const values = allValues(c);
       const sel = new Set(cfg.filters[c] || []);
       const poss = possibleValues(c);
@@ -1382,6 +1388,17 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           ${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>
           ${textMeasures.length ? `<optgroup label="Contar valores (texto e datas)">${textMeasures.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>` : ''}</select></label>
         ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || PID))).join('')}</select></label>` : ''}
+        <label class="field" data-show="fpLayout"><span>Disposição dos filtros</span><select name="fpLayout">
+          ${opt('auto', 'Automática (pelo espaço)', !base.fpLayout || base.fpLayout === 'auto')}
+          ${opt('row', 'Em linha (um ao lado do outro)', base.fpLayout === 'row')}
+          ${opt('column', 'Em coluna (um embaixo do outro)', base.fpLayout === 'column')}
+          ${opt('grid', 'Grade (N por linha)', base.fpLayout === 'grid')}</select></label>
+        <label class="field" data-show="fpCols"><span>Filtros por linha</span><select name="fpCols">
+          ${[2, 3, 4, 5, 6].map(n => opt(String(n), String(n), String(base.fpCols || 3) === String(n))).join('')}</select></label>
+        <label class="field" data-show="fpStyle"><span>Estilo</span><select name="fpStyle">
+          ${opt('auto', 'Automático (pelo espaço)', !base.fpStyle || base.fpStyle === 'auto')}
+          ${opt('compact', 'Compacto (caixa que abre a lista)', base.fpStyle === 'compact')}
+          ${opt('list', 'Listas abertas', base.fpStyle === 'list')}</select></label>
         <div class="field dt-fields" data-show="fields">
           <span><span id="dt-title">Campos da tabela</span> <small class="muted" id="dt-count"></small></span>
           <div class="dt-tools">
@@ -1426,6 +1443,9 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
         table: form.wtable ? form.wtable.value : PID,
         fields: t === 'datatable' || t === 'filterpane' ? dtPicked() : base.fields,
+        fpLayout: t === 'filterpane' ? form.fpLayout.value : base.fpLayout,
+        fpCols: t === 'filterpane' ? +form.fpCols.value : base.fpCols,
+        fpStyle: t === 'filterpane' ? form.fpStyle.value : base.fpStyle,
         dim2: t === 'pivot' ? (form.dim2.value || null) : base.dim2,
         pcol: t === 'pivot' ? (form.pcol.value || null) : base.pcol,
         target: ['kpi', 'gauge'].includes(t) ? (form.target.value || null) : base.target,
@@ -1443,6 +1463,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       const kpiBase = w.compare && w.compare !== 'none' ? 18 : (w.period && w.period !== 'all') ? 16 : 0;
       const minGh = t === 'kpi' ? (w.target ? Math.max(kpiBase, 15) + 6 : kpiBase) : t === 'gauge' ? 20 : 0;
       if (minGh && (w.gh || 0) < minGh) { w.gh = minGh; resolve(w); }
+      // painel de filtro "em linha": vira uma barra na largura toda (baixinha no estilo compacto)
+      if (t === 'filterpane' && w.fpLayout === 'row' && base.fpLayout !== 'row') {
+        w.gx = 0; w.gw = COLS;
+        if (w.fpStyle === 'compact') w.gh = 9;
+        resolve(w);
+      }
+      if (t === 'filterpane' && w.fpStyle === 'list' && (w.gh || 0) < 24) { w.gh = 24; resolve(w); }   // listas abertas precisam de altura
       markDirty(); draw();
     });
 
@@ -1467,6 +1494,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         format: !noChart,
         table: false,
         fields: t === 'datatable' || t === 'filterpane',
+        fpLayout: t === 'filterpane', fpStyle: t === 'filterpane',
+        fpCols: t === 'filterpane' && form.fpLayout.value === 'grid',
         period: t === 'kpi' && !!cfg.dateCol,
         compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
         top: !noChart && !['kpi', 'gauge', 'pivot'].includes(t),

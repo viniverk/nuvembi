@@ -682,3 +682,10 @@ body.busy, body.busy * { cursor: progress !important; }
 .sp-mini { font-style: normal; font-size: 10px; color: var(--muted); }
 .sp-chip.on .sp-mini { color: #dbeafe; }
 .dt-tools select { min-width: 0; max-width: 45%; padding: .35rem .5rem; }
+/* painel de filtro: disposição em linha / coluna / grade */
+.fp-compact { display: grid; gap: .4rem .5rem; align-content: start; }
+.fp-compact.fp-across .fp-pill { flex-direction: column; align-items: stretch; gap: .1rem; position: relative; padding-right: 1.4rem; }
+.fp-compact.fp-across .fp-pill strong { font-size: 12px; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-compact.fp-across .fp-pill span { text-align: left; color: var(--text); }
+.fp-compact.fp-across .fp-pill.on span { color: #15803d; }
+.fp-compact.fp-across .fp-pill i { position: absolute; right: .55rem; top: 50%; transform: translateY(-50%); }
