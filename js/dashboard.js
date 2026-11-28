@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName } from './parser.js?v=24';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=24';
-import { buildModel } from './model.js?v=24';
-import { ColTable } from './coltable.js?v=24';
+import { isCodeName } from './parser.js?v=25';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=25';
+import { buildModel } from './model.js?v=25';
+import { ColTable } from './coltable.js?v=25';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };

@@ -19,8 +19,8 @@
 //            comentários //, /* */ e REM.
 //  Roda inteiro no navegador sobre as tabelas colunares (ColTable).
 // =============================================================
-import { ColTable } from './coltable.js?v=24';
-import { toNumber, toISODate } from './parser.js?v=24';
+import { ColTable } from './coltable.js?v=25';
+import { toNumber, toISODate } from './parser.js?v=25';
 
 export class ScriptError extends Error {
   constructor(msg, line) { super(msg); this.line = line; }
@@ -240,6 +240,43 @@ export const FUNCTION_NAMES = [
   'Round', 'Floor', 'Ceil', 'Abs', 'Mod', 'Div', 'RangeSum', 'ApplyMap', 'Exists', 'AutoNumber', 'RecNo', 'RowNo',
   'Sum', 'Count', 'Avg', 'Min', 'Max', 'Only', 'Concat'
 ];
+
+// ---------------- cores do editor (realce de sintaxe) ----------------
+const HL_KW = new Set(['load', 'from', 'resident', 'inline', 'where', 'group', 'by', 'order', 'as', 'distinct', 'mapping', 'noconcatenate',
+  'concatenate', 'left', 'right', 'inner', 'outer', 'join', 'keep', 'drop', 'table', 'tables', 'field', 'fields', 'rename', 'to', 'set', 'let',
+  'trace', 'exit', 'script', 'and', 'or', 'not', 'like', 'asc', 'desc', 'store', 'select', 'sql', 'while', 'autogenerate']);
+const HL_FN = new Set([...Object.keys(F), ...AGG, ...Object.keys(ALIAS), ...SPECIAL]);
+const hesc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+export function highlightScript(src) {
+  let out = '', i = 0, stmtStart = true;
+  const n = src.length;
+  const span = (cls, t) => { out += `<span class="hl-${cls}">${hesc(t)}</span>`; };
+  while (i < n) {
+    const ch = src[i];
+    if (ch === '/' && src[i + 1] === '/') { let j = src.indexOf('\n', i); if (j < 0) j = n; span('com', src.slice(i, j)); i = j; continue; }
+    if (ch === '/' && src[i + 1] === '*') { let j = src.indexOf('*/', i + 2); j = j < 0 ? n : j + 2; span('com', src.slice(i, j)); i = j; continue; }
+    if (ch === "'") { let j = i + 1; while (j < n && !(src[j] === "'" && src[j + 1] !== "'")) j += src[j] === "'" ? 2 : 1; j = Math.min(n, j + 1); span('str', src.slice(i, j)); i = j; stmtStart = false; continue; }
+    if (ch === '[') { let j = src.indexOf(']', i); j = j < 0 ? n : j + 1; const after = src.slice(j).match(/^\s*:/); span(after && stmtStart ? 'lbl' : 'fld', src.slice(i, j)); i = j; stmtStart = false; continue; }
+    if (ch === '"') { let j = src.indexOf('"', i + 1); j = j < 0 ? n : j + 1; span('fld', src.slice(i, j)); i = j; stmtStart = false; continue; }
+    if (ch === '$' && src[i + 1] === '(') { let j = src.indexOf(')', i); j = j < 0 ? n : j + 1; span('var', src.slice(i, j)); i = j; continue; }
+    if (/[0-9]/.test(ch) && !/[A-Za-z_À-ÿ]/.test(src[i - 1] || '')) { let j = i; while (j < n && /[0-9.]/.test(src[j])) j++; span('num', src.slice(i, j)); i = j; stmtStart = false; continue; }
+    if (ID_START.test(ch)) {
+      let j = i; while (j < n && ID_CHAR.test(src[j])) j++;
+      const w = src.slice(i, j), lw = w.toLowerCase();
+      if (lw === 'rem' && stmtStart) { let k = src.indexOf(';', j); k = k < 0 ? n : k + 1; span('com', src.slice(i, k)); i = k; continue; }
+      const rest = src.slice(j);
+      if (stmtStart && /^\s*:/.test(rest) && !HL_KW.has(lw)) span('lbl', w);
+      else if (HL_KW.has(lw)) span('kw', w);
+      else if (/^\s*\(/.test(rest) && HL_FN.has(lw)) span('fn', w);
+      else out += hesc(w);
+      i = j; stmtStart = false; continue;
+    }
+    if (ch === ';') { span('op', ';'); i++; stmtStart = true; continue; }
+    if (ch === ':') { out += ':'; i++; continue; }
+    out += hesc(ch); i++;
+  }
+  return out + '\n';   // linha extra: mantém a última linha alinhada com a caixa de texto
+}
 
 // explicação de cada função (aparece ao passar o mouse no editor)
 export const FUNCTION_HELP = {

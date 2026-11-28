@@ -511,3 +511,20 @@ textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--primary); }
 .se-st.info { color: #1d4ed8; background: #eff6ff; }
 .se-st.warn { color: #b45309; background: #fffbeb; }
 .se-st.muted { color: var(--muted); }
+
+/* ---------- cores do script ---------- */
+.se-code { position: relative; flex: 1; min-width: 0; display: flex; }
+.se-hl, .se-code #se-text { font: 13px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 0; padding: 10px 8px; tab-size: 4; white-space: pre; letter-spacing: 0; border: 0; }
+.se-hl { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: #0f172a; background: #fff; }
+.se-code #se-text { position: relative; z-index: 1; color: transparent; caret-color: #0f172a; background: transparent; }
+.se-code #se-text::selection { background: rgba(59, 130, 246, .25); color: transparent; }
+.se-code #se-text::placeholder { color: #94a3b8; }
+.hl-com { color: #6b8f71; font-style: italic; }
+.hl-kw { color: #1d4ed8; font-weight: 600; }
+.hl-fn { color: #0f766e; }
+.hl-str { color: #b45309; }
+.hl-fld { color: #7c3aed; }
+.hl-num { color: #be185d; }
+.hl-var { color: #c2410c; font-weight: 600; }
+.hl-lbl { color: #0f172a; font-weight: 700; text-decoration: underline; text-decoration-color: #cbd5e1; text-underline-offset: 3px; }
+.hl-op { color: #64748b; }

@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=24';
-import { createStore, ROLES } from './store.js?v=24';
-import { readFile, normalizeRows } from './parser.js?v=24';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=24';
-import { buildModel } from './model.js?v=24';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=24';
-import { ColTable } from './coltable.js?v=24';
-import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP } from './script.js?v=24';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=25';
+import { createStore, ROLES } from './store.js?v=25';
+import { readFile, normalizeRows } from './parser.js?v=25';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=25';
+import { buildModel } from './model.js?v=25';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=25';
+import { ColTable } from './coltable.js?v=25';
+import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=25';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1066,7 +1066,10 @@ async function showScriptEditor(id) {
         </div>
         <div class="se-editor">
           <pre class="se-gutter" id="se-gutter" aria-hidden="true"></pre>
-          <textarea id="se-text" spellcheck="false" autocomplete="off" autocapitalize="off" ${edit ? '' : 'readonly'} placeholder="${edit ? 'Escreva o script de carga aqui ou clique em ✨ Gerar script das fontes.' : 'Este app não tem script.'}">${esc(initial)}</textarea>
+          <div class="se-code">
+            <pre class="se-hl" id="se-hl" aria-hidden="true"></pre>
+            <textarea id="se-text" spellcheck="false" autocomplete="off" autocapitalize="off" ${edit ? '' : 'readonly'} placeholder="${edit ? 'Escreva o script de carga aqui ou clique em ✨ Gerar script das fontes.' : 'Este app não tem script.'}">${esc(initial)}</textarea>
+          </div>
         </div>
         <div class="se-log card" id="se-log"><p class="muted small">O resultado da carga aparece aqui: tabelas, linhas, campos e erros com o número da linha.</p></div>
       </section>
@@ -1091,10 +1094,13 @@ async function showScriptEditor(id) {
     for (let i = 1; i <= n; i++) out += (i === errLine ? `<b>${i}</b>` : i) + '\n';
     gutter.innerHTML = out;
     gutter.scrollTop = ta.scrollTop;
+    hl.innerHTML = highlightScript(ta.value);
+    hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft;
   };
+  const hl = view.querySelector('#se-hl');
   paintGutter();
   paintStatus();
-  ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+  ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
   ta.addEventListener('input', () => {
     errLine = 0; paintGutter();
     try { localStorage.setItem(draftKey, ta.value); } catch {}
