@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=19';
-import { createStore, ROLES } from './store.js?v=19';
-import { readFile, normalizeRows } from './parser.js?v=19';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=19';
-import { buildModel } from './model.js?v=19';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=19';
-import { ColTable } from './coltable.js?v=19';
-import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=19';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=20';
+import { createStore, ROLES } from './store.js?v=20';
+import { readFile, normalizeRows } from './parser.js?v=20';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=20';
+import { buildModel } from './model.js?v=20';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=20';
+import { ColTable } from './coltable.js?v=20';
+import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=20';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -19,8 +19,8 @@
 //            comentários //, /* */ e REM.
 //  Roda inteiro no navegador sobre as tabelas colunares (ColTable).
 // =============================================================
-import { ColTable } from './coltable.js?v=19';
-import { toNumber, toISODate } from './parser.js?v=19';
+import { ColTable } from './coltable.js?v=20';
+import { toNumber, toISODate } from './parser.js?v=20';
 
 export class ScriptError extends Error {
   constructor(msg, line) { super(msg); this.line = line; }

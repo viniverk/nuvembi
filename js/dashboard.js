@@ -6,13 +6,13 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName } from './parser.js?v=19';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=19';
-import { buildModel } from './model.js?v=19';
-import { ColTable } from './coltable.js?v=19';
+import { isCodeName } from './parser.js?v=20';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=20';
+import { buildModel } from './model.js?v=20';
+import { ColTable } from './coltable.js?v=20';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
-const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
+const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
 const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const MONTHS_FULL = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const GRAINS = { month: 'Mês', year: 'Ano', day: 'Dia' };
@@ -193,8 +193,9 @@ function simpleAcc(w) {
   return {
     add(k, v) {
       let a = groups.get(k);
-      if (!a) { a = { sum: 0, n: 0, cnt: 0, min: Infinity, max: -Infinity }; groups.set(k, a); }
-      a.cnt++;
+      if (!a) { a = { sum: 0, n: 0, cnt: 0, min: Infinity, max: -Infinity, set: w.agg === 'countd' ? new Set() : null }; groups.set(k, a); }
+      if (w.measure === '__count' || (v !== null && v !== undefined)) a.cnt++;
+      if (a.set && v !== null && v !== undefined) a.set.add(v);
       if (typeof v === 'number' && v === v) { a.sum += v; a.n++; if (v < a.min) a.min = v; if (v > a.max) a.max = v; }
     },
     result: () => [...groups].map(([k, a]) => [k, accValue(a, w)])
@@ -202,6 +203,7 @@ function simpleAcc(w) {
 }
 function accValue(a, w) {
   if (w.measure === '__count' || w.agg === 'count') return a.cnt;
+  if (w.agg === 'countd') return a.set ? a.set.size : 0;
   if (!a.n) return 0;
   return w.agg === 'avg' ? a.sum / a.n : w.agg === 'min' ? a.min : w.agg === 'max' ? a.max : a.sum;
 }
@@ -275,7 +277,7 @@ function aggregateByCode(T, idx, dimName, keyOfValue, w) {
 const isAdditive = w => {
   const m = masterOf(w);
   if (m) return !!compiledOf(m).additive;
-  return w.measure === '__count' || w.agg === 'sum' || w.agg === 'count';
+  return w.measure === '__count' || w.agg === 'sum' || w.agg === 'count';   // contagem distinta não soma entre grupos
 };
 const measureLabel = w => masterOf(w)?.name || (w.measure === '__count' ? 'Quantidade de linhas' : `${AGG[w.agg]} de ${w.measure}`);
 // valor único de um conjunto de posições (KPI e comparativos)
@@ -323,7 +325,7 @@ function groupData(T, idx, w, dimCol, valuesOf) {
   const grain = w.grain || 'month';
   const keyOfValue = isDate ? v => dateKey(v, grain) : v => v ?? '(vazio)';
   let g;
-  if (!valuesOf && T.col(w.dim)?.dict) g = aggregateByCode(T, idx, w.dim, keyOfValue, w);
+  if (!valuesOf && T.col(w.dim)?.dict && w.agg !== 'countd' && !(w.agg === 'count' && w.measure !== '__count')) g = aggregateByCode(T, idx, w.dim, keyOfValue, w);
   else {
     const vals = valuesOf || (() => { const gt = T.getter(w.dim); return i => [gt(i)]; })();
     g = aggregate(T, idx, isDate
@@ -980,8 +982,11 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       measure: mainMeasure, agg: mainMeasure === '__count' ? 'count' : 'sum',
       top: 10, sort: 'desc', color: 0
     };
+    // qualquer campo pode ser dimensão (como no Qlik); números (Ano, Mês…) ficam num grupo à parte
     const dimOpts = cols.filter(c => c.type !== 'number')
-      .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : '') + tableHint(c), c.name === base.dim)).join('');
+      .map(c => opt(c.name, c.name + (c.type === 'date' ? ' (data)' : '') + tableHint(c), c.name === base.dim)).join('')
+      + (numCols.length ? `<optgroup label="Campos numéricos (ex.: Ano, Mês)">${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.dim)).join('')}</optgroup>` : '');
+    const textMeasures = cols.filter(c => c.type !== 'number');
     const body = `
       <div class="type-picker">${Object.entries(TYPES).map(([k, t]) => `
         <label class="type-opt"><input type="radio" name="type" value="${k}" ${k === base.type ? 'checked' : ''}>
@@ -995,7 +1000,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           ${cfg.masters.length ? `<optgroup label="Itens mestres">${cfg.masters.map(m => opt('m:' + m.id, 'ƒ ' + m.name, base.measure === 'm:' + m.id)).join('')}</optgroup>` : ''}
           <optgroup label="Campos">
           ${opt('__count', 'Quantidade de linhas', base.measure === '__count')}
-          ${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup></select></label>
+          ${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>
+          ${textMeasures.length ? `<optgroup label="Contar valores (texto e datas)">${textMeasures.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>` : ''}</select></label>
         ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || PID))).join('')}</select></label>` : ''}
         <label class="field" data-show="agg"><span>Cálculo</span><select name="agg">${Object.entries(AGG).map(([k, v]) => opt(k, v, k === base.agg)).join('')}</select></label>
         <label class="field" data-show="top"><span>Mostrar</span><select name="top">
@@ -1014,11 +1020,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       <div class="field" data-show="color"><span>Cor</span><div class="swatches">${PALETTE.map((c, i) => `
         <label><input type="radio" name="color" value="${i}" ${i === (base.color || 0) ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>`;
 
+    const isTextField = m => !!m && m !== '__count' && !m.startsWith('m:') && cols.some(c => c.name === m && c.type !== 'number');
+    const aggFor = (m, a) => m === '__count' ? 'count' : isTextField(m) && !['count', 'countd'].includes(a) ? 'countd' : a;
     const modal = openModal(isNew ? 'Adicionar gráfico' : 'Editar gráfico', body, isNew ? 'Adicionar' : 'Aplicar', form => {
       const t = form.type.value;
       const w = {
         ...base, type: t, title: form.wtitle.value.trim(), dim: form.dim.value || null, grain: form.grain.value,
-        measure: form.measure.value, agg: form.measure.value === '__count' ? 'count' : form.agg.value,
+        measure: form.measure.value, agg: aggFor(form.measure.value, form.agg.value),
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
         format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
         table: form.wtable ? form.wtable.value : PID
@@ -1040,6 +1048,10 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     const form = modal.querySelector('form');
     const refresh = () => {
       const t = form.type.value;
+      // campo de texto como medida: só contagem ou contagem distinta
+      const txt = isTextField(form.measure.value);
+      [...form.agg.options].forEach(o => { o.disabled = txt && !['count', 'countd'].includes(o.value); });
+      if (txt && !['count', 'countd'].includes(form.agg.value)) form.agg.value = 'countd';
       const dimCol = cols.find(c => c.name === form.dim.value);
       const show = {
         dim: !['kpi', 'datatable'].includes(t),
@@ -1058,7 +1070,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       form.querySelectorAll('[data-show]').forEach(f => (f.hidden = !show[f.dataset.show]));
       const preview = {
         type: t, dim: form.dim.value, grain: form.grain.value, measure: form.measure.value,
-        agg: form.measure.value === '__count' ? 'count' : form.agg.value
+        agg: aggFor(form.measure.value, form.agg.value)
       };
       form.wtitle.placeholder = autoTitle(preview, ds);
     };

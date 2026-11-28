@@ -5,9 +5,9 @@
 //  Datas podem ser agrupadas por mês ou ano; dá para importar só
 //  a partir de uma data.
 // =============================================================
-import { parseQVD } from './qvd.js?v=19';
-import { normalizeValue } from './parser.js?v=19';
-import { ColTable } from './coltable.js?v=19';
+import { parseQVD } from './qvd.js?v=20';
+import { normalizeValue } from './parser.js?v=20';
+import { ColTable } from './coltable.js?v=20';
 
 // percorre todas as linhas do arquivo (QVD em fluxo, sem carregar tudo; Excel/CSV da memória)
 function eachRow(sheet, visit) {
