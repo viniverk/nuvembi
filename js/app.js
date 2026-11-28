@@ -1,13 +1,13 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=15';
-import { createStore, ROLES } from './store.js?v=15';
-import { readFile, normalizeRows } from './parser.js?v=15';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=15';
-import { buildModel } from './model.js?v=15';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=15';
-import { ColTable } from './coltable.js?v=15';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=16';
+import { createStore, ROLES } from './store.js?v=16';
+import { readFile, normalizeRows } from './parser.js?v=16';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=16';
+import { buildModel } from './model.js?v=16';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=16';
+import { ColTable } from './coltable.js?v=16';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -272,6 +272,57 @@ async function showHome() {
   }));
   bindInviteButtons(view);
   view.querySelectorAll('[data-refresh]').forEach(b => b.addEventListener('click', () => openRefresh(list.find(d => d.id === b.dataset.refresh))));
+}
+
+// ---------------- Janela: escolher colunas da importação ----------------
+function chooseColumns(sheet, onApply) {
+  document.querySelector('.cols-modal')?.remove();
+  const sample = c => { for (const r of sheet.data) { const v = r[c.index]; if (v !== null && v !== undefined && v !== '') return v instanceof Date ? v.toLocaleDateString('pt-BR') : String(v); } return ''; };
+  const keep = sheet.columns.map(c => c.keep !== false);
+  const back = document.createElement('div');
+  back.className = 'modal-back cols-modal';
+  back.innerHTML = `
+    <div class="modal card modal-wide">
+      <header><h2>Escolher colunas</h2><button class="x" data-close>×</button></header>
+      <div class="modal-body">
+        <p class="muted">O arquivo tem <strong>${sheet.columns.length} colunas</strong>. Desmarque as que não precisa no painel — ele fica menor e abre mais rápido.</p>
+        <div class="cols-tools">
+          <input id="cols-search" placeholder="Pesquisar coluna…">
+          <button type="button" class="btn ghost small" data-c="all">Selecionar todas</button>
+          <button type="button" class="btn ghost small" data-c="none">Limpar seleção</button>
+          <span class="muted small" id="cols-count"></span>
+        </div>
+        <div class="cols-list"></div>
+      </div>
+      <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="cols-ok">Aplicar</button></footer>
+    </div>`;
+  document.body.append(back);
+  const list = back.querySelector('.cols-list'), search = back.querySelector('#cols-search');
+  const visible = () => { const q = search.value.trim().toLowerCase(); return sheet.columns.map((c, i) => i).filter(i => !q || sheet.columns[i].name.toLowerCase().includes(q)); };
+  const paint = () => {
+    list.innerHTML = visible().map(i => {
+      const c = sheet.columns[i];
+      return `<label class="col-item ${keep[i] ? '' : 'off'}"><input type="checkbox" data-i="${i}" ${keep[i] ? 'checked' : ''}>
+        <span class="ci-name">${esc(c.name)}</span><span class="tag ${c.type}">${TYPE_LABEL[c.type]}</span>
+        <small class="muted ci-sample">${esc(sample(c).slice(0, 40))}</small></label>`;
+    }).join('') || '<div class="muted">Nenhuma coluna encontrada.</div>';
+    back.querySelector('#cols-count').textContent = `${keep.filter(Boolean).length} de ${keep.length} selecionadas`;
+  };
+  list.addEventListener('change', e => { const i = +e.target.dataset.i; keep[i] = e.target.checked; e.target.closest('.col-item').classList.toggle('off', !keep[i]); back.querySelector('#cols-count').textContent = `${keep.filter(Boolean).length} de ${keep.length} selecionadas`; });
+  search.addEventListener('input', paint);
+  // os botões valem para as colunas visíveis (a pesquisa permite marcar/desmarcar um grupo)
+  back.querySelector('[data-c="all"]').addEventListener('click', () => { visible().forEach(i => (keep[i] = true)); paint(); });
+  back.querySelector('[data-c="none"]').addEventListener('click', () => { visible().forEach(i => (keep[i] = false)); paint(); });
+  const close = () => back.remove();
+  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+  back.querySelector('#cols-ok').addEventListener('click', () => {
+    if (!keep.some(Boolean)) { toast('Selecione pelo menos uma coluna.', 'err'); return; }
+    sheet.columns.forEach((c, i) => (c.keep = keep[i]));
+    close(); onApply();
+  });
+  paint();
+  setTimeout(() => search.focus(), 30);
 }
 
 // ---------------- Atualizar dados de um painel ----------------
@@ -603,12 +654,17 @@ async function handleFile(file) {
   const baseName = file.name.replace(/\.[^.]+$/, '');
   const source = /\.(csv|txt)$/i.test(file.name) ? 'csv' : /\.qvd$/i.test(file.name) ? 'qvd' : 'excel';
 
+  // colunas escolhidas para importar (todas marcadas por padrão)
+  const active = () => sheet.columns.filter(c => c.keep !== false);
+  sheets.forEach(sh => sh.columns.forEach(c => { if (c.keep === undefined) c.keep = true; }));
+  const askedCols = new Set();   // abas em que a janela "Escolher colunas" já abriu sozinha
+
   // configuração do resumo (para arquivos grandes)
   let sumOn = false, sumKeep = null, sumGrains = {}, sumFrom = '', sumDateCol = null, sumResult = null, sumSig = '';
-  const sumSignature = () => JSON.stringify([sumKeep, sumGrains, sumFrom, sumDateCol, sheet.columns.map(c => c.type), sheet.name]);
+  const sumSignature = () => JSON.stringify([sumKeep, sumGrains, sumFrom, sumDateCol, sheet.columns.map(c => c.type + (c.keep === false ? '-' : '')), sheet.name]);
   const resetSum = () => {
-    sumKeep = sheet.columns.map(c => c.name);
-    const dates = sheet.columns.filter(c => c.type === 'date');
+    sumKeep = active().map(c => c.name);
+    const dates = active().filter(c => c.type === 'date');
     sumGrains = Object.fromEntries(dates.map(c => [c.name, 'month']));
     sumDateCol = dates[0]?.name || null;
     sumResult = null;
@@ -619,7 +675,8 @@ async function handleFile(file) {
   const runSummary = () => {
     const sig = sumSignature();
     if (sumResult && sig === sumSig) return sumResult;
-    sumResult = summarize(sheet, sheet.columns, { keep: sumKeep, grains: sumGrains, from: sumFrom, dateCol: sumDateCol });
+    const names = new Set(active().map(c => c.name));
+    sumResult = summarize(sheet, active(), { keep: sumKeep.filter(n => names.has(n)), grains: sumGrains, from: sumFrom, dateCol: sumDateCol });
     sumSig = sig;
     return sumResult;
   };
@@ -627,14 +684,15 @@ async function handleFile(file) {
   const draw = () => {
     const total = sheet.total || sheet.data.length;
     const tooMany = total > MAX_ROWS;
-    const dateCols = sheet.columns.filter(c => c.type === 'date');
+    const dateCols = active().filter(c => c.type === 'date');
+    const nOn = active().length, nAll = sheet.columns.length;
     const sumBox = `
       <details class="summary-box" ${sumOn || tooMany ? 'open' : ''}>
         <summary><strong>Resumir dados antes de importar</strong> ${tooMany ? '<span class="tag warn-tag">recomendado: passa do limite</span>' : '<span class="muted">(opcional)</span>'}</summary>
         <p class="muted small">Agrupa as linhas pelos campos de <strong>texto e data</strong> que você manter e <strong>soma os campos numéricos</strong>. A coluna <code>${COUNT_FIELD}</code> guarda quantas linhas originais cada linha resumida representa. Os totais ficam iguais; desmarque campos que não fazem sentido somar (preço unitário, por exemplo) e códigos muito detalhados (nº da nota, item) para resumir mais.</p>
         <label class="check"><input type="checkbox" id="sum-on" ${sumOn ? 'checked' : ''}><span>Resumir este arquivo</span></label>
         <div class="sum-grid" ${sumOn ? '' : 'hidden'}>
-          <div class="sum-cols">${sheet.columns.map(c => `
+          <div class="sum-cols">${active().map(c => `
             <label class="sum-col ${sumKeep.includes(c.name) ? '' : 'off'}">
               <input type="checkbox" data-keep="${esc(c.name)}" ${sumKeep.includes(c.name) ? 'checked' : ''}>
               <span>${esc(c.name)}</span><small class="muted">${c.type === 'number' ? 'soma' : c.type === 'date' ? 'data' : 'agrupa'}</small>
@@ -656,12 +714,19 @@ async function handleFile(file) {
         </div>
         <p class="muted">${nf.format(sheet.total || sheet.data.length)} linhas · ${sheet.columns.length} colunas${sheet.total ? ' · arquivo QVD do Qlik' : ''}. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
         ${tooMany && !sumOn ? `<p class="error">Este plano aceita até ${nf.format(MAX_ROWS)} linhas por painel e o arquivo tem ${nf.format(total)}. Resuma os dados abaixo para usar o arquivo inteiro — sem resumir, só as primeiras ${nf.format(MAX_ROWS)} linhas serão importadas.</p>` : ''}
-        <div class="table-wrap"><table>
+        <div class="cols-bar">
+          <strong class="${nOn ? '' : 'error'}">${nOn} de ${nAll} colunas selecionadas</strong>
+          <button type="button" class="btn ghost small" data-cols="all">Selecionar todas</button>
+          <button type="button" class="btn ghost small" data-cols="none">Limpar seleção</button>
+          <button type="button" class="btn small" data-cols="popup">☰ Escolher colunas…</button>
+          <span class="muted small">Desmarque as colunas que não quer importar — o painel fica menor e mais rápido.</span>
+        </div>
+        <div class="table-wrap"><table class="preview-table">
           <thead>
-            <tr>${sheet.columns.map(c => `<th>${esc(c.name)}</th>`).join('')}</tr>
-            <tr>${sheet.columns.map((c, i) => `<th><select data-col="${i}" class="type-${c.type}">${Object.entries(TYPE_LABEL).map(([k, v]) => `<option value="${k}" ${k === c.type ? 'selected' : ''}>${v}</option>`).join('')}</select></th>`).join('')}</tr>
+            <tr>${sheet.columns.map((c, i) => `<th class="${c.keep === false ? 'col-off' : ''}"><label class="th-check"><input type="checkbox" data-keepcol="${i}" ${c.keep === false ? '' : 'checked'}><span>${esc(c.name)}</span></label></th>`).join('')}</tr>
+            <tr>${sheet.columns.map((c, i) => `<th class="${c.keep === false ? 'col-off' : ''}"><select data-col="${i}" class="type-${c.type}">${Object.entries(TYPE_LABEL).map(([k, v]) => `<option value="${k}" ${k === c.type ? 'selected' : ''}>${v}</option>`).join('')}</select></th>`).join('')}</tr>
           </thead>
-          <tbody>${sheet.data.slice(0, 8).map(r => `<tr>${sheet.columns.map(c => `<td>${esc(r[c.index] instanceof Date ? r[c.index].toLocaleDateString('pt-BR') : r[c.index])}</td>`).join('')}</tr>`).join('')}</tbody>
+          <tbody>${sheet.data.slice(0, 8).map(r => `<tr>${sheet.columns.map(c => `<td class="${c.keep === false ? 'col-off' : ''}">${esc(r[c.index] instanceof Date ? r[c.index].toLocaleDateString('pt-BR') : r[c.index])}</td>`).join('')}</tr>`).join('')}</tbody>
         </table></div>
         ${sumBox}
         <div class="row-end"><span class="muted" id="progress"></span><button class="btn" id="btn-save">Criar painel</button></div>
@@ -688,6 +753,13 @@ async function handleFile(file) {
     if (sumResult && sumSig === sumSignature()) showResult(sumResult);
 
     preview.querySelector('#sheet')?.addEventListener('change', e => { sheet = sheets[+e.target.value]; resetSum(); sumOn = (sheet.total || sheet.data.length) > MAX_ROWS; draw(); });
+    const colsChanged = () => { resetSum(); draw(); };
+    preview.querySelectorAll('[data-keepcol]').forEach(cb => cb.addEventListener('change', () => { sheet.columns[+cb.dataset.keepcol].keep = cb.checked; colsChanged(); }));
+    preview.querySelector('[data-cols="all"]').addEventListener('click', () => { sheet.columns.forEach(c => (c.keep = true)); colsChanged(); });
+    preview.querySelector('[data-cols="none"]').addEventListener('click', () => { sheet.columns.forEach(c => (c.keep = false)); colsChanged(); });
+    preview.querySelector('[data-cols="popup"]').addEventListener('click', () => chooseColumns(sheet, colsChanged));
+    // arquivo com muitas colunas: abre a janela de escolha sozinho na primeira vez
+    if (sheet.columns.length > 10 && !askedCols.has(sheet)) { askedCols.add(sheet); setTimeout(() => chooseColumns(sheet, colsChanged), 50); }
     preview.querySelectorAll('[data-col]').forEach(s => s.addEventListener('change', () => {
       sheet.columns[+s.dataset.col].type = s.value;
       s.className = `type-${s.value}`;
@@ -696,6 +768,7 @@ async function handleFile(file) {
     preview.querySelector('#btn-save').addEventListener('click', async e => {
       const btn = e.currentTarget;
       const name = preview.querySelector('#ds-name').value.trim() || baseName;
+      if (!active().length) { toast('Selecione pelo menos uma coluna para importar.', 'err'); return; }
       btn.disabled = true;
       const prog = preview.querySelector('#progress');
       prog.textContent = 'Preparando dados…';
@@ -711,8 +784,8 @@ async function handleFile(file) {
         } else {
           prog.textContent = 'Lendo o arquivo inteiro…';
           await new Promise(res => setTimeout(res, 30));
-          table = ingest(sheet, sheet.columns, { limit: MAX_ROWS }).table;
-          columns = sheet.columns.map(({ name, type }) => ({ name, type }));
+          table = ingest(sheet, active(), { limit: MAX_ROWS }).table;
+          columns = active().map(({ name, type }) => ({ name, type }));
         }
         const meta = { name, source, columns, rowCount: table.n };
         if (summary) meta.summary = summary;
