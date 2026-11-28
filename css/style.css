@@ -656,3 +656,4 @@ body.busy, body.busy * { cursor: progress !important; }
 .sp-members td { padding: .3rem .25rem; border-top: 1px solid #f1f5f9; }
 .sp-members td:last-child { text-align: right; }
 .sp-members select { min-width: 0; padding: .25rem .4rem; }
+.th-table { display: block; font-weight: 400; font-size: 10px; color: var(--muted); text-transform: none; }

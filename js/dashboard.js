@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName, toNumber } from './parser.js?v=30';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=30';
-import { buildModel } from './model.js?v=30';
-import { ColTable } from './coltable.js?v=30';
+import { isCodeName, toNumber } from './parser.js?v=31';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=31';
+import { buildModel } from './model.js?v=31';
+import { ColTable } from './coltable.js?v=31';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -799,6 +799,9 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
 
     if (w.type === 'filterpane') { fillFilterPane(w, body); return; }
 
+    if (w.type === 'datatable' && Array.isArray(w.fields) && w.fields.some(n => !(model.byId[w.table] || model.primary).columns.some(c => c.name === n))) {
+      fillMultiTable(w, body, ctx); return;
+    }
     if (w.type === 'datatable') {
       const t = model.byId[w.table] || model.primary;
       const tRows = ctx.state[t.id];
@@ -958,6 +961,44 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       });
     }
     charts.set(w.id, chart);
+  }
+
+  // ---------- tabela de dados com campos de várias tabelas ligadas ----------
+  // parte da tabela com mais linhas entre as que têm os campos (em geral a de movimento, ex.: Vendas)
+  // e busca os campos das outras pelas ligações, respeitando as seleções
+  function fillMultiTable(w, body, ctx) {
+    const picked = w.fields.map(n => cols.find(c => c.name === n)).filter(Boolean);
+    if (!picked.length) { body.innerHTML = '<div class="muted center small">Escolha os campos: Editar → ✎ na tabela → Campos.</div>'; return; }
+    const cands = model.tables.filter(t => picked.some(c => model.has(t.id, c.name)));
+    const base = cands.sort((a, b) => b.n - a.n)[0];
+    const rows = ctx.state[base.id];
+    const gets = picked.map(c => {
+      if (model.has(base.id, c.name)) { const g = base.t.getter(c.name); return i => [g(i)]; }
+      return model.pathTo(base.id, c.name) ? model.resolver(ctx.state, base.id, c.name) : () => [];
+    });
+    const LIMIT = 200;
+    const out = [];
+    let multi = false, total = 0;
+    for (let j = 0; j < rows.length && out.length < LIMIT; j++) {
+      const i = rows[j];
+      // um valor por campo; se a ligação trouxer vários (ex.: 1 cliente com 2 vendedores), vira uma linha para cada
+      let combos = [[]];
+      for (const f of gets) {
+        const vs = f(i);
+        const list = vs.length ? vs : [null];
+        if (list.length > 1) multi = true;
+        combos = combos.flatMap(cmb => list.map(v => [...cmb, v]));
+        if (combos.length > LIMIT) combos = combos.slice(0, LIMIT);
+      }
+      for (const cmb of combos) { if (out.length < LIMIT) out.push(cmb); }
+    }
+    total = rows.length;
+    const unlinked = picked.filter((c, k) => !model.has(base.id, c.name) && !model.pathTo(base.id, c.name));
+    body.innerHTML = `<div class="table-wrap fill"><table>
+        <thead><tr>${picked.map(c => `<th class="${c.type}" title="${esc(c.tables.map(id => model.byId[id].name).join(', '))}">${esc(c.name)}${model.multi ? `<small class="th-table">${esc(model.byId[c.tables[0]].name)}</small>` : ''}</th>`).join('')}</tr></thead>
+        <tbody>${out.map(r => `<tr>${r.map((v, k) => `<td class="${picked[k].type}">${v === null || v === undefined ? '<span class="muted">—</span>' : esc(fmtCell(v, picked[k].type))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>
+      <div class="muted small">${total > LIMIT || out.length >= LIMIT ? `Mostrando ${LIMIT} linhas de ${nf.format(total)} registros de ${esc(base.name)}.` : `${nf.format(total)} registro(s) de ${esc(base.name)}.`}${multi ? ' Alguns registros têm mais de um valor ligado e aparecem em mais de uma linha.' : ''}${unlinked.length ? ` ⚠ Sem ligação com ${esc(base.name)}: ${esc(unlinked.map(c => c.name).join(', '))}.` : ''}</div>`;
   }
 
   // ---------- painel de filtro: listas de valores na pasta (verde = selecionado, branco = possível, cinza = excluído) ----------
@@ -1416,7 +1457,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         measure: !noChart,
         agg: !noChart && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
         format: !noChart,
-        table: t === 'datatable',
+        table: false,
         fields: t === 'datatable' || t === 'filterpane',
         period: t === 'kpi' && !!cfg.dateCol,
         compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
@@ -1448,7 +1489,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     // painel de filtro: qualquer campo do app (+ Ano/Mês da data principal)
     const fpCols = [...(cfg.dateCol ? [{ name: '__year', type: 'text' }, { name: '__month', type: 'text' }] : []), ...cols];
     const isFP = () => form.type.value === 'filterpane';
-    const dtSource = () => isFP() ? { columns: fpCols } : dtTable();
+    const isDT = () => form.type.value === 'datatable';
+    const dtSource = () => isFP() ? { columns: fpCols } : { columns: cols };
     let dtOrder = [], dtSel = new Set();
     const dtReset = (t, fields, emptyDefault) => {
       const names = t.columns.map(c => c.name);
@@ -1459,12 +1501,12 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     const dtList = form.querySelector('#dt-list'), dtSearch = form.querySelector('#dt-search');
     const dtRender = () => {
       const t = dtSource();
-      form.querySelector('#dt-title').textContent = isFP() ? 'Campos do filtro' : 'Campos da tabela';
+      form.querySelector('#dt-title').textContent = isFP() ? 'Campos do filtro' : model.multi ? 'Campos (de qualquer tabela)' : 'Campos da tabela';
       const q = dtSearch.value.trim().toLowerCase();
       dtList.innerHTML = dtOrder.map((n, k) => {
         const c = t.columns.find(x => x.name === n);
         return `<li ${q && !n.toLowerCase().includes(q) ? 'hidden' : ''} class="${dtSel.has(n) ? 'on' : ''}">
-          <label><input type="checkbox" data-dtf="${esc(n)}" ${dtSel.has(n) ? 'checked' : ''}> ${esc(fieldLabel(n))} <i class="tag ${c?.type}">${c?.type === 'number' ? 'número' : c?.type === 'date' ? 'data' : 'texto'}</i></label>
+          <label><input type="checkbox" data-dtf="${esc(n)}" ${dtSel.has(n) ? 'checked' : ''}> ${esc(fieldLabel(n))}${model.multi && c?.tables ? ` <small class="muted">${esc(c.tables.map(id => model.byId[id].name).join(', '))}</small>` : ''} <i class="tag ${c?.type}">${c?.type === 'number' ? 'número' : c?.type === 'date' ? 'data' : 'texto'}</i></label>
           <span class="dt-move"><button type="button" data-dtup="${k}" ${k ? '' : 'disabled'} title="Subir">↑</button><button type="button" data-dtdown="${k}" ${k < dtOrder.length - 1 ? '' : 'disabled'} title="Descer">↓</button></span>
         </li>`;
       }).join('');
@@ -1472,7 +1514,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     };
     // ordem final = ordem da lista, só os marcados; todos marcados na ordem original = sem escolha
     const dtPicked = () => {
-      if (isFP()) return dtOrder.filter(n => dtSel.has(n));
+      if (isFP() || isDT()) return dtOrder.filter(n => dtSel.has(n));
       const t = dtTable();
       const out = dtOrder.filter(n => dtSel.has(n));
       if (!out.length) return null;
@@ -1483,7 +1525,12 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     const fpDefault = () => (cfg.filterCols?.length ? cfg.filterCols : textCols.slice(0, 3).map(c => c.name)).filter(n => fpCols.some(c => c.name === n));
     const dtInit = () => {
       if (isFP()) dtReset(dtSource(), base.type === 'filterpane' ? base.fields : null, fpDefault());
-      else dtReset(dtTable(), base.type === 'datatable' && (base.table === (form.wtable ? form.wtable.value : PID) || !form.wtable) ? base.fields : null);
+      else {
+        // tabela antiga (sem escolha): começa com os campos da tabela que ela mostrava
+        const legacy = (model.byId[base.table] || model.primary).columns.map(c => c.name);
+        const start = base.type === 'datatable' && Array.isArray(base.fields) && base.fields.length ? base.fields : legacy;
+        dtReset(dtSource(), start, start);
+      }
     };
     dtInit();
     dtRender();
