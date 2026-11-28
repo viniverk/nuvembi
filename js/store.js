@@ -15,7 +15,7 @@
 //  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
-import { ColTable, pack, unpack } from './coltable.js?v=22';
+import { ColTable, pack, unpack } from './coltable.js?v=23';
 
 const FB = '10.12.2';
 const BIN = 900_000;   // bytes por documento (limite do Firestore: 1 MB)

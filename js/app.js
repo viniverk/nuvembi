@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=22';
-import { createStore, ROLES } from './store.js?v=22';
-import { readFile, normalizeRows } from './parser.js?v=22';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=22';
-import { buildModel } from './model.js?v=22';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=22';
-import { ColTable } from './coltable.js?v=22';
-import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=22';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=23';
+import { createStore, ROLES } from './store.js?v=23';
+import { readFile, normalizeRows } from './parser.js?v=23';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=23';
+import { buildModel } from './model.js?v=23';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=23';
+import { ColTable } from './coltable.js?v=23';
+import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP } from './script.js?v=23';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1038,7 +1038,8 @@ async function showScriptEditor(id) {
             <div class="se-fields">${t.columns.map(c => `<button type="button" class="se-field ${c.type}" data-insfield="${esc(qn(c.name))}" title="${c.type}">${esc(c.name)}</button>`).join('')}</div>
           </details>`).join('') : `<p class="muted small">Nenhuma fonte ainda. Adicione tabelas no <a href="#/dados/${encodeURIComponent(ds.id)}">Gerenciador de dados</a>.</p>`}
         <h4>Funções</h4>
-        <div class="se-fields">${FUNCTION_NAMES.map(f => `<button type="button" class="se-fn" data-insfn="${f}">${f}</button>`).join('')}</div>
+        <div class="se-fields">${FUNCTION_NAMES.map(f => { const h = FUNCTION_HELP[f]; return `<button type="button" class="se-fn" data-insfn="${f}" ${h ? `title="${esc(h[0] + '\n' + h[1] + '\nEx.: ' + h[2])}"` : ''}>${f}</button>`; }).join('')}</div>
+        <div class="se-fnhelp" id="se-fnhelp"><span class="muted small">Passe o mouse numa função para ver o que ela faz. Clique para inserir.</span></div>
       </aside>
       <section class="se-main">
         <div class="se-bar">
@@ -1095,6 +1096,10 @@ async function showScriptEditor(id) {
   });
   view.querySelectorAll('[data-insfield]').forEach(b => b.addEventListener('click', () => insert(b.dataset.insfield)));
   view.querySelectorAll('[data-insfn]').forEach(b => b.addEventListener('click', () => insert(b.dataset.insfn + '(')));
+  // explicação da função no quadro abaixo da lista
+  const fnBox = view.querySelector('#se-fnhelp');
+  const showFn = f => { const h = FUNCTION_HELP[f]; if (!h) return; fnBox.innerHTML = `<code class="sig">${esc(h[0])}</code><p>${esc(h[1])}</p><code class="ex">${esc(h[2])}</code>`; };
+  view.querySelectorAll('[data-insfn]').forEach(b => { b.addEventListener('mouseenter', () => showFn(b.dataset.insfn)); b.addEventListener('focus', () => showFn(b.dataset.insfn)); });
   view.querySelectorAll('[data-insload]').forEach(b => b.addEventListener('click', () => {
     const t = sources[+b.dataset.insload];
     const pre = ta.value && !ta.value.endsWith('\n\n') ? (ta.value.endsWith('\n') ? '\n' : '\n\n') : '';

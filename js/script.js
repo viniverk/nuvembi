@@ -19,8 +19,8 @@
 //            comentários //, /* */ e REM.
 //  Roda inteiro no navegador sobre as tabelas colunares (ColTable).
 // =============================================================
-import { ColTable } from './coltable.js?v=22';
-import { toNumber, toISODate } from './parser.js?v=22';
+import { ColTable } from './coltable.js?v=23';
+import { toNumber, toISODate } from './parser.js?v=23';
 
 export class ScriptError extends Error {
   constructor(msg, line) { super(msg); this.line = line; }
@@ -240,6 +240,69 @@ export const FUNCTION_NAMES = [
   'Round', 'Floor', 'Ceil', 'Abs', 'Mod', 'Div', 'RangeSum', 'ApplyMap', 'Exists', 'AutoNumber', 'RecNo', 'RowNo',
   'Sum', 'Count', 'Avg', 'Min', 'Max', 'Only', 'Concat'
 ];
+
+// explicação de cada função (aparece ao passar o mouse no editor)
+export const FUNCTION_HELP = {
+  Year: ['Year(data)', 'Ano da data.', "Year(Data_Emissao) AS Ano → 2026"],
+  Month: ['Month(data)', 'Mês da data, de 1 a 12.', 'Month(Data_Emissao) AS Mes → 3'],
+  Day: ['Day(data)', 'Dia do mês, de 1 a 31.', 'Day(Data_Emissao) AS Dia → 15'],
+  WeekDay: ['WeekDay(data)', 'Dia da semana: 0 = segunda … 6 = domingo.', 'WeekDay(Data) AS DiaSemana'],
+  Week: ['Week(data)', 'Número da semana no ano (padrão ISO).', 'Week(Data) AS Semana → 11'],
+  Quarter: ['Quarter(data)', 'Trimestre da data, de 1 a 4.', "'T' & Quarter(Data) AS Trimestre → T1"],
+  MonthName: ['MonthName(data)', 'Ano e mês como texto aaaa-mm (ordena certo).', 'MonthName(Data) AS AnoMes → 2026-03'],
+  MonthStart: ['MonthStart(data)', 'Primeiro dia do mês da data.', 'MonthStart(Data) → 2026-03-01'],
+  MonthEnd: ['MonthEnd(data)', 'Último dia do mês da data.', 'MonthEnd(Data) → 2026-03-31'],
+  YearStart: ['YearStart(data)', 'Primeiro dia do ano da data.', 'YearStart(Data) → 2026-01-01'],
+  AddMonths: ['AddMonths(data, n)', 'Soma (ou subtrai, com n negativo) meses à data.', 'AddMonths(Data, -12) AS DataAnoAnterior'],
+  AddDays: ['AddDays(data, n)', 'Soma (ou subtrai) dias à data.', 'AddDays(Vencimento, 30)'],
+  MakeDate: ['MakeDate(ano, mês, dia)', 'Monta uma data a partir de números.', 'MakeDate(Ano, Mes, 1) AS Competencia'],
+  Today: ['Today()', 'Data de hoje, no momento da carga.', 'Today() - Vencimento AS DiasAtraso'],
+  Date: ['Date(valor)', 'Converte para data (aceita aaaa-mm-dd, dd/mm/aaaa, aaaammdd ou número).', "Date('15/03/2026')"],
+  'Date#': ['Date#(texto, formato)', 'Lê uma data num formato específico. Ideal para datas do Protheus (texto aaaammdd).', "Date#(D2_EMISSAO, 'YYYYMMDD') AS Emissao"],
+  Num: ['Num(valor)', 'Converte para número.', 'Num(Quantidade)'],
+  'Num#': ['Num#(texto)', 'Lê número escrito em texto, inclusive no formato brasileiro (1.234,56).', "Num#('1.234,56') → 1234.56"],
+  Text: ['Text(valor)', 'Converte para texto (mantém zeros à esquerda).', 'Text(Codigo)'],
+  Left: ['Left(texto, n)', 'Primeiros n caracteres.', "Left(Cod_Produto, 3) AS Grupo"],
+  Right: ['Right(texto, n)', 'Últimos n caracteres.', 'Right(Nota, 4)'],
+  Mid: ['Mid(texto, início, n)', 'Pedaço do texto a partir da posição início (a 1ª é 1), com n caracteres.', 'Mid(CNPJ, 1, 8) AS Raiz_CNPJ'],
+  Len: ['Len(texto)', 'Quantidade de caracteres.', 'Len(Descricao)'],
+  Upper: ['Upper(texto)', 'Tudo em MAIÚSCULAS.', 'Upper(Cliente)'],
+  Lower: ['Lower(texto)', 'Tudo em minúsculas.', 'Lower(Email)'],
+  Capitalize: ['Capitalize(texto)', 'Primeira Letra De Cada Palavra Em Maiúscula.', 'Capitalize(Nome)'],
+  Trim: ['Trim(texto)', 'Tira espaços do começo e do fim (comum em campos do Protheus).', 'Trim(B1_DESC) AS Produto'],
+  Replace: ['Replace(texto, de, para)', 'Troca todas as ocorrências de um trecho.', "Replace(Telefone, '-', '')"],
+  Index: ['Index(texto, trecho)', 'Posição onde o trecho aparece (0 se não aparece).', "Index(Email, '@')"],
+  SubField: ['SubField(texto, separador, n)', 'n-ésima parte do texto separado (n negativo conta do fim).', "SubField('SC-Joinville', '-', 2) → Joinville"],
+  TextBetween: ['TextBetween(texto, início, fim)', 'Texto entre dois marcadores.', "TextBetween(Obs, '[', ']')"],
+  PurgeChar: ['PurgeChar(texto, caracteres)', 'Remove os caracteres informados.', "PurgeChar(CNPJ, './-') AS CNPJ_Num"],
+  KeepChar: ['KeepChar(texto, caracteres)', 'Mantém só os caracteres informados.', "KeepChar(Telefone, '0123456789')"],
+  If: ['If(condição, se_sim, se_não)', 'Escolhe um valor conforme a condição.', "If(Valor_Total >= 1000, 'Grande', 'Pequena') AS Porte"],
+  Alt: ['Alt(valor1, valor2, …)', 'Primeiro valor que não está vazio.', "Alt(Apelido, Nome, 'Sem nome')"],
+  IsNull: ['IsNull(valor)', 'Verdadeiro se o valor está vazio.', "If(IsNull(Vendedor), 'Sem vendedor', Vendedor)"],
+  Null: ['Null()', 'Valor vazio.', 'If(Valor < 0, Null(), Valor)'],
+  Pick: ['Pick(n, valor1, valor2, …)', 'Devolve o valor da posição n.', "Pick(Quarter(Data), 'Verão', 'Outono', 'Inverno', 'Primavera')"],
+  Match: ['Match(valor, a, b, …)', 'Posição do valor na lista (0 se não está). Use em WHERE.', "WHERE Match(Filial, '0101', '0201')"],
+  WildMatch: ['WildMatch(valor, padrão, …)', 'Como Match, mas aceita * e ? e ignora maiúsculas.', "WHERE WildMatch(Produto, 'parafuso*')"],
+  Round: ['Round(número, passo)', 'Arredonda (passo 0.01 = 2 casas; 10 = dezena).', 'Round(Valor_Total, 0.01)'],
+  Floor: ['Floor(número, passo)', 'Arredonda para baixo.', 'Floor(Idade, 10) AS FaixaEtaria'],
+  Ceil: ['Ceil(número, passo)', 'Arredonda para cima.', 'Ceil(Peso)'],
+  Abs: ['Abs(número)', 'Valor sem sinal (absoluto).', 'Abs(Diferenca)'],
+  Mod: ['Mod(a, b)', 'Resto da divisão de a por b.', 'Mod(Numero, 2) AS Par_Impar'],
+  Div: ['Div(a, b)', 'Parte inteira da divisão.', 'Div(Minutos, 60) AS Horas'],
+  RangeSum: ['RangeSum(a, b, …)', 'Soma os valores tratando vazio como zero.', 'RangeSum(Frete, Seguro, Despesas) AS Custos'],
+  ApplyMap: ['ApplyMap(\'Mapa\', chave, padrão)', 'Busca a chave num MAPPING LOAD (de-para). Se não achar, devolve o padrão.', "ApplyMap('MapaUF', Cliente, 'Sem UF') AS UF"],
+  Exists: ['Exists(campo, valor)', 'Verdadeiro se o valor já foi carregado no campo. Use em WHERE.', 'WHERE Exists(Cliente)  ·  WHERE NOT Exists(Nota)'],
+  AutoNumber: ['AutoNumber(valor)', 'Troca o valor por um número sequencial (chaves menores).', "AutoNumber(Filial & '|' & Nota) AS ChaveNota"],
+  RecNo: ['RecNo()', 'Número da linha na fonte lida.', 'RecNo() AS LinhaOrigem'],
+  RowNo: ['RowNo()', 'Número da linha na tabela gerada.', 'RowNo() AS Seq'],
+  Sum: ['Sum(campo)', 'Soma — use com GROUP BY.', 'LOAD Cliente, Sum(Valor) AS Total RESIDENT Vendas GROUP BY Cliente;'],
+  Count: ['Count(campo) · Count(DISTINCT campo) · Count(*)', 'Conta linhas ou valores distintos — use com GROUP BY.', 'Count(DISTINCT Nota) AS Notas'],
+  Avg: ['Avg(campo)', 'Média — use com GROUP BY.', 'Avg(Preco) AS PrecoMedio'],
+  Min: ['Min(campo)', 'Menor valor (ou primeira data) — use com GROUP BY.', 'Min(Data) AS PrimeiraCompra'],
+  Max: ['Max(campo)', 'Maior valor (ou última data) — use com GROUP BY.', 'Max(Data) AS UltimaCompra'],
+  Only: ['Only(campo)', 'O valor, se for único no grupo; vazio se houver mais de um.', 'Only(Vendedor)'],
+  Concat: ['Concat(campo, separador)', 'Junta os valores distintos do grupo num texto.', "Concat(Produto, ', ') AS Produtos"],
+};
 
 // ---------------- leitor de expressões ----------------
 const KW_STOP = new Set(['as', 'from', 'resident', 'inline', 'where', 'group', 'order', 'and', 'or', 'not', 'like', 'to', 'while', 'autogenerate']);

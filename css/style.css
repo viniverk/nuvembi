@@ -501,3 +501,8 @@ textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--primary); }
 .dbg-table td { font-size: 12px; white-space: nowrap; }
 .dbg-table td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .dbg-table .null { color: #cbd5e1; }
+.se-fnhelp { position: sticky; bottom: -.9rem; background: #fff; border-top: 1px solid var(--line); margin: .5rem -.9rem -.9rem; padding: .6rem .9rem .8rem; min-height: 92px; }
+.se-fnhelp p { margin: .3rem 0; font-size: 13px; }
+.se-fnhelp code { display: block; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.se-fnhelp .sig { color: #0f766e; font-weight: 600; }
+.se-fnhelp .ex { background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; padding: .3rem .45rem; color: #334155; }
