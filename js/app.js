@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=23';
-import { createStore, ROLES } from './store.js?v=23';
-import { readFile, normalizeRows } from './parser.js?v=23';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=23';
-import { buildModel } from './model.js?v=23';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=23';
-import { ColTable } from './coltable.js?v=23';
-import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP } from './script.js?v=23';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=24';
+import { createStore, ROLES } from './store.js?v=24';
+import { readFile, normalizeRows } from './parser.js?v=24';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=24';
+import { buildModel } from './model.js?v=24';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=24';
+import { ColTable } from './coltable.js?v=24';
+import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP } from './script.js?v=24';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -835,12 +835,15 @@ async function loadApp(id) {
 const scriptCache = new Map();   // id -> { data, script, out }
 const sourcesOf = (ds, data) => Object.fromEntries(buildModel(ds, data).tables.map(t => [t.name, t.t]));
 const scriptTableId = name => 'sc_' + name.replace(/[^A-Za-z0-9]/g, ch => '_' + ch.charCodeAt(0).toString(36));
+// script em uso pelo app = o da última carga (apps antigos só têm "script")
+const loadedScriptOf = ds => (ds.loadedScript !== undefined ? ds.loadedScript : ds.script) || '';
 // devolve o que o app analisa: as fontes (sem script) ou as tabelas geradas pelo script
 function appModel(ds, data) {
-  if (!ds.script || !ds.script.trim()) return { ds, data, result: null };
+  const active = loadedScriptOf(ds);
+  if (!active.trim()) return { ds, data, result: null };
   const hit = scriptCache.get(ds.id);
-  if (hit && hit.data === data && hit.script === ds.script) return hit.out;
-  const result = runScript(ds.script, sourcesOf(ds, data));
+  if (hit && hit.data === data && hit.script === active) return hit.out;
+  const result = runScript(active, sourcesOf(ds, data));
   let out;
   if (!result.ok) out = { ds, data, result, error: result.error };
   else out = {
@@ -848,7 +851,7 @@ function appModel(ds, data) {
     ds: { ...ds, columns: [], mainName: undefined, tables: result.tables.map(o => ({ id: scriptTableId(o.name), name: o.name, columns: o.t.columns, rowCount: o.t.n })) },
     data: Object.fromEntries(result.tables.map(o => [scriptTableId(o.name), o.t])),
   };
-  scriptCache.set(ds.id, { data, script: ds.script, out });
+  scriptCache.set(ds.id, { data, script: active, out });
   return out;
 }
 const scriptErrorCard = (ds, m) => `
@@ -1023,7 +1026,8 @@ async function showScriptEditor(id) {
   const draftKey = 'nbi-script-draft:' + ds.id;
   let draft = null;
   try { draft = localStorage.getItem(draftKey); } catch {}
-  const saved = ds.script || '';
+  let saved = ds.script || '';                 // texto salvo
+  let loaded = loadedScriptOf(ds);             // texto da última carga (o que o app usa)
   const initial = draft !== null && draft !== saved ? draft : saved;
   const qn = s => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : `[${s}]`;
 
@@ -1043,12 +1047,13 @@ async function showScriptEditor(id) {
       </aside>
       <section class="se-main">
         <div class="se-bar">
-          ${edit ? '<button class="btn" id="se-run" title="Ctrl+Enter">▶ Carregar dados</button>' : ''}
+          ${edit ? '<button class="btn" id="se-run" title="Salva e carrega os dados (Ctrl+Enter)">▶ Carregar dados</button>' : ''}
+          ${edit ? '<button class="btn ghost" id="se-save" title="Salva o script sem carregar os dados (Ctrl+S)">💾 Salvar</button>' : ''}
           ${edit ? `<button class="btn ghost" id="se-gen">✨ Gerar script das fontes</button>` : ''}
           <button class="btn ghost" id="se-dbgbtn" title="Testar o script com poucas linhas, sem salvar">🐞 Depurar</button>
           <button class="btn ghost" id="se-helpbtn">? Ajuda</button>
-          ${edit && saved ? '<button class="btn ghost danger" id="se-off">Desativar script</button>' : ''}
-          <span class="muted small" id="se-status">${draft !== null && draft !== saved ? '✎ Rascunho não carregado (restaurado deste navegador)' : saved ? '✓ Script carregado' : 'Sem script: o app usa as fontes como estão'}</span>
+          ${edit && loaded ? '<button class="btn ghost danger" id="se-off">Desativar script</button>' : ''}
+          <span class="small" id="se-status"></span>
         </div>
         <div class="se-help card" id="se-help" hidden>${SCRIPT_HELP}</div>
         <div class="se-debug card" id="se-debug" hidden>
@@ -1069,6 +1074,17 @@ async function showScriptEditor(id) {
 
   const ta = view.querySelector('#se-text'), gutter = view.querySelector('#se-gutter'), status = view.querySelector('#se-status'), logEl = view.querySelector('#se-log');
   let errLine = 0;
+  // situação do script: carregado / salvo sem carregar / alterações não salvas
+  const paintStatus = () => {
+    const t = ta.value;
+    const [cls, txt] = t !== saved
+      ? ['warn', draft !== null && t === draft && t !== saved ? '✎ Rascunho recuperado deste navegador — não salvo' : '✎ Alterações não salvas']
+      : !t.trim() && !loaded ? ['muted', 'Sem script: o app usa as fontes como estão']
+      : t === loaded ? ['ok', '✓ Salvo e carregado']
+      : ['info', loaded ? '💾 Salvo — ainda não carregado (o app usa a última carga)' : '💾 Salvo — ainda não carregado (o app usa as fontes)'];
+    status.className = 'small se-st ' + cls;
+    status.textContent = txt;
+  };
   const paintGutter = () => {
     const n = ta.value.split('\n').length;
     let out = '';
@@ -1077,11 +1093,12 @@ async function showScriptEditor(id) {
     gutter.scrollTop = ta.scrollTop;
   };
   paintGutter();
+  paintStatus();
   ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
   ta.addEventListener('input', () => {
     errLine = 0; paintGutter();
     try { localStorage.setItem(draftKey, ta.value); } catch {}
-    status.textContent = ta.value === (ds.script || '') ? '✓ Script carregado' : '✎ Alterações não carregadas';
+    paintStatus();
   });
   const insert = text => {
     if (!edit) return;
@@ -1091,6 +1108,7 @@ async function showScriptEditor(id) {
   };
   ta.addEventListener('keydown', e => {
     if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) { e.preventDefault(); insert('    '); }
+    if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveOnly(); }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) { e.preventDefault(); view.querySelector('#se-debug').hidden = false; debugRun(); return; }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
   });
@@ -1144,10 +1162,11 @@ async function showScriptEditor(id) {
     ta.dispatchEvent(new Event('input'));
   });
   view.querySelector('#se-off')?.addEventListener('click', async () => {
-    if (!confirm('Desativar o script? O app volta a usar as fontes do Gerenciador como estão. O texto do script fica guardado como rascunho neste navegador.')) return;
+    if (!confirm('Desativar o script? O app volta a usar as fontes do Gerenciador como estão. O texto do script continua salvo aqui para você carregar de novo quando quiser.')) return;
     try {
-      try { localStorage.setItem(draftKey, ta.value); } catch {}
-      await store.saveScript(ds.id, ''); ds.script = ''; scriptCache.delete(ds.id);
+      await store.saveScript(ds.id, { script: ta.value, loadedScript: '' });
+      ds.script = ta.value; ds.loadedScript = ''; scriptCache.delete(ds.id);
+      try { localStorage.removeItem(draftKey); } catch {}
       toast('Script desativado.'); showScriptEditor(ds.id);
     } catch (e) { console.error(e); toast('Não foi possível salvar.', 'err'); }
   });
@@ -1179,10 +1198,11 @@ async function showScriptEditor(id) {
     await new Promise(r => setTimeout(r, 30));
     try {
       if (!text.trim()) {
-        await store.saveScript(ds.id, ''); ds.script = ''; scriptCache.delete(ds.id);
+        await store.saveScript(ds.id, { script: '', loadedScript: '' });
+        ds.script = ''; ds.loadedScript = ''; saved = ''; loaded = ''; scriptCache.delete(ds.id);
         try { localStorage.removeItem(draftKey); } catch {}
         logEl.innerHTML = '<p class="muted">Script vazio: o app usa as fontes do Gerenciador como estão.</p>';
-        status.textContent = 'Sem script: o app usa as fontes como estão';
+        paintStatus();
         return;
       }
       const res = runScript(text, sourcesOf(ds, data));
@@ -1193,11 +1213,11 @@ async function showScriptEditor(id) {
         return;
       }
       if (!res.tables.length) { showLog(res, '<p class="error small">O script não gerou nenhuma tabela; nada foi alterado.</p>'); return; }
-      await store.saveScript(ds.id, text);
-      ds.script = text;
+      await store.saveScript(ds.id, { script: text, loadedScript: text });
+      ds.script = text; ds.loadedScript = text; saved = text; loaded = text;
       scriptCache.delete(ds.id);
       try { localStorage.removeItem(draftKey); } catch {}
-      status.textContent = '✓ Script carregado';
+      paintStatus();
       showLog(res, `<div class="row-actions"><a class="btn" href="#/painel/${encodeURIComponent(ds.id)}">📊 Ir para Analisar</a><a class="btn ghost" href="#/dados/${encodeURIComponent(ds.id)}">Ver o modelo</a></div>`);
       toast('Dados carregados.');
     } catch (e) {
@@ -1207,8 +1227,25 @@ async function showScriptEditor(id) {
     }
   }
   view.querySelector('#se-run')?.addEventListener('click', run);
+  // salvar sem carregar: o app continua usando o script da última carga
+  async function saveOnly() {
+    if (!edit) return;
+    const btn = view.querySelector('#se-save');
+    const text = ta.value;
+    if (text === saved) { toast('Nada novo para salvar.'); return; }
+    btn.disabled = true;
+    try {
+      await store.saveScript(ds.id, { script: text, loadedScript: loaded });   // loadedScript fica igual
+      ds.script = text; ds.loadedScript = loaded; saved = text;
+      try { localStorage.removeItem(draftKey); } catch {}
+      paintStatus();
+      toast(text === loaded ? 'Script salvo.' : 'Script salvo. Os dados do app só mudam quando você clicar em ▶ Carregar dados.');
+    } catch (e) { console.error(e); toast('Não foi possível salvar o script.', 'err'); }
+    finally { btn.disabled = false; }
+  }
+  view.querySelector('#se-save')?.addEventListener('click', saveOnly);
   // mostra o resultado do script já carregado
-  if (saved && initial === saved) { const m = appModel(ds, data); if (m.result) { showLog(m.result); if (m.error && m.result.line) { errLine = m.result.line; paintGutter(); } } }
+  if (loaded && initial === loaded) { const m = appModel(ds, data); if (m.result) { showLog(m.result); if (m.error && m.result.line) { errLine = m.result.line; paintGutter(); } } }
 }
 
 // ---------------- Compartilhar por link ----------------

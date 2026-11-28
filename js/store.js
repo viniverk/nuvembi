@@ -15,7 +15,7 @@
 //  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
-import { ColTable, pack, unpack } from './coltable.js?v=23';
+import { ColTable, pack, unpack } from './coltable.js?v=24';
 
 const FB = '10.12.2';
 const BIN = 900_000;   // bytes por documento (limite do Firestore: 1 MB)
@@ -258,7 +258,8 @@ async function createFirebaseStore(config) {
       return tables;
     },
     async updateDashboard(id, dashboard) { await F.updateDoc(dsDoc(id), { dashboard }); },
-    async saveScript(id, script) { await F.updateDoc(dsDoc(id), { script, updatedAt: now(), updatedBy: me.email }); },
+    // patch: { script } = texto salvo no editor; { loadedScript } = script usado pelo app (última carga)
+    async saveScript(id, patch) { await F.updateDoc(dsDoc(id), { ...patch, updatedAt: now(), updatedBy: me.email }); },
     async deleteDataset(id) {
       const ds = await F.getDoc(dsDoc(id));
       const shareId = ds.exists() ? ds.data().shareId : null;
@@ -507,11 +508,11 @@ function createLocalStore() {
       await set('datasets:' + org.id, list);
       onProgress && onProgress(1);
     },
-    async saveScript(id, script) {
+    async saveScript(id, patch) {
       await needEdit();
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === id);
-      if (ds) { ds.script = script; ds.updatedAt = now(); await set('datasets:' + org.id, list); }
+      if (ds) { Object.assign(ds, patch); ds.updatedAt = now(); await set('datasets:' + org.id, list); }
     },
     async updateDashboard(id, dashboard) {
       await needEdit();

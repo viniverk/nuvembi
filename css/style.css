@@ -506,3 +506,8 @@ textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--primary); }
 .se-fnhelp code { display: block; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
 .se-fnhelp .sig { color: #0f766e; font-weight: 600; }
 .se-fnhelp .ex { background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; padding: .3rem .45rem; color: #334155; }
+.se-st { padding: .2rem .55rem; border-radius: 999px; }
+.se-st.ok { color: #15803d; background: #f0fdf4; }
+.se-st.info { color: #1d4ed8; background: #eff6ff; }
+.se-st.warn { color: #b45309; background: #fffbeb; }
+.se-st.muted { color: var(--muted); }
