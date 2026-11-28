@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName, toNumber } from './parser.js?v=33';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=33';
-import { buildModel } from './model.js?v=33';
-import { ColTable } from './coltable.js?v=33';
+import { isCodeName, toNumber } from './parser.js?v=34';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=34';
+import { buildModel } from './model.js?v=34';
+import { ColTable } from './coltable.js?v=34';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -363,20 +363,24 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   let cfg = clone(saved);
   let editing = false;
 
-  // ---------- pastas (abas): cada pasta tem seus gráficos; seleções valem para todas ----------
+  // ---------- pastas (abas): cada pasta tem seus gráficos e seus filtros; seleções valem para todas ----------
   const ensureSheets = c => {
     if (!c.sheets || !c.sheets.length) c.sheets = [{ id: uid(), name: 'Pasta 1', widgets: c.widgets || [] }];
+    // apps antigos: os filtros eram do app inteiro -> cada pasta existente fica com eles
+    c.sheets.forEach(sh => { if (!Array.isArray(sh.filterCols)) sh.filterCols = [...(c.filterCols || [])]; });
     delete c.widgets;
     return c;
   };
   ensureSheets(saved); ensureSheets(cfg);
   let sheetIdx = 0;
-  cfg.widgets = cfg.sheets[0].widgets;                    // gráficos da pasta ativa
-  const syncSheet = () => { cfg.sheets[sheetIdx].widgets = cfg.widgets; };
-  const openSheet = i => { syncSheet(); sheetIdx = clamp(i, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets; };
+  // pasta ativa: cfg.widgets e cfg.filterCols apontam para os dela
+  const loadSheet = () => { const sh = cfg.sheets[sheetIdx]; cfg.widgets = sh.widgets; cfg.filterCols = sh.filterCols || []; };
+  loadSheet();
+  const syncSheet = () => { cfg.sheets[sheetIdx].widgets = cfg.widgets; cfg.sheets[sheetIdx].filterCols = cfg.filterCols; };
+  const openSheet = i => { syncSheet(); sheetIdx = clamp(i, 0, cfg.sheets.length - 1); loadSheet(); };
   const forSave = () => { syncSheet(); const c = clone(cfg); delete c.widgets; return c; };
   const allWidgets = () => { syncSheet(); return cfg.sheets.flatMap(sh => sh.widgets); };
-  const resetFromSaved = () => { cfg = clone(saved); sheetIdx = clamp(sheetIdx, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets; };
+  const resetFromSaved = () => { cfg = clone(saved); sheetIdx = clamp(sheetIdx, 0, cfg.sheets.length - 1); loadSheet(); };
   let dirty = false;
   const charts = new Map();
 
@@ -444,7 +448,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
   let undoStack = [], redoStack = [], lastSnap = null;
   const snapshot = () => { syncSheet(); return clone({ sheets: cfg.sheets, sheetIdx, filterCols: cfg.filterCols, dateCol: cfg.dateCol, masters: cfg.masters }); };
   const restore = snap => {
-    cfg.sheets = clone(snap.sheets); sheetIdx = clamp(snap.sheetIdx || 0, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets;
+    cfg.sheets = clone(snap.sheets); sheetIdx = clamp(snap.sheetIdx || 0, 0, cfg.sheets.length - 1); loadSheet();
     cfg.filterCols = clone(snap.filterCols); cfg.dateCol = snap.dateCol; cfg.masters = clone(snap.masters || []);
   };
   function resetUndo() { undoStack = []; redoStack = []; lastSnap = snapshot(); }
@@ -502,7 +506,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           <button class="btn ghost icon" data-act="undo" title="Desfazer (Ctrl+Z)" ${undoStack.length ? '' : 'disabled'}>↶</button>
           <button class="btn ghost icon" data-act="redo" title="Refazer (Ctrl+Y)" ${redoStack.length ? '' : 'disabled'}>↷</button>
         </div>
-        <button class="btn ghost" data-act="filters">⚲ Escolher filtros</button>
+        <button class="btn ghost" data-act="filters" title="Filtros que aparecem no topo desta pasta">⚲ Filtros da pasta</button>
         <button class="btn ghost" data-act="masters">ƒ Itens mestres</button>
         <button class="btn ghost" data-act="add">+ Adicionar gráfico</button>
         <button class="btn ghost" data-act="cancel">Cancelar</button>
@@ -569,7 +573,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     }).join('');
     const filterBar = editing ? `
       <div class="filters card">
-        ${filterBtns || '<span class="muted">Nenhum filtro escolhido. Clique em "Escolher filtros".</span>'}
+        ${filterBtns || '<span class="muted">Esta pasta não tem filtros. Clique em "Filtros da pasta" para escolher os desta pasta.</span>'}
       </div>` : '';
 
     el.innerHTML = `${editing ? toolbar : ''}${tabs}${selBar}${filterBar}
@@ -1201,22 +1205,22 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       const a = b.dataset.shact;
       syncSheet();
       if (a === 'add') {
-        cfg.sheets.splice(sheetIdx + 1, 0, { id: uid(), name: `Pasta ${cfg.sheets.length + 1}`, widgets: [] });
+        cfg.sheets.splice(sheetIdx + 1, 0, { id: uid(), name: `Pasta ${cfg.sheets.length + 1}`, widgets: [], filterCols: [] });   // pasta nova começa sem filtros
         openSheet(sheetIdx + 1);
       } else if (a === 'dup') {
         const cur = cfg.sheets[sheetIdx];
-        cfg.sheets.splice(sheetIdx + 1, 0, { id: uid(), name: `${cur.name} (cópia)`, widgets: clone(cur.widgets).map(w => ({ ...w, id: uid() })) });
+        cfg.sheets.splice(sheetIdx + 1, 0, { id: uid(), name: `${cur.name} (cópia)`, widgets: clone(cur.widgets).map(w => ({ ...w, id: uid() })), filterCols: [...(cur.filterCols || [])] });
         openSheet(sheetIdx + 1);
       } else if (a === 'rename') return renameSheet();
       else if (a === 'left' || a === 'right') {
         const j = sheetIdx + (a === 'left' ? -1 : 1);
         [cfg.sheets[sheetIdx], cfg.sheets[j]] = [cfg.sheets[j], cfg.sheets[sheetIdx]];
-        sheetIdx = j; cfg.widgets = cfg.sheets[sheetIdx].widgets;
+        sheetIdx = j; loadSheet();
       } else if (a === 'del') {
         if (cfg.sheets.length < 2) return;
         if (!confirm(`Excluir a pasta "${cfg.sheets[sheetIdx].name}" e os gráficos dela?`)) return;
         cfg.sheets.splice(sheetIdx, 1);
-        sheetIdx = clamp(sheetIdx, 0, cfg.sheets.length - 1); cfg.widgets = cfg.sheets[sheetIdx].widgets;
+        sheetIdx = clamp(sheetIdx, 0, cfg.sheets.length - 1); loadSheet();
       }
       markDirty(); draw();
     }));
@@ -1658,7 +1662,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       <label class="check"><input type="checkbox" name="f" value="${esc(value)}" ${checked.has(value) ? 'checked' : ''}>
         <span>${esc(label)}</span>${extra}</label>`;
     const body = `
-      <p class="muted">Marque os campos que devem aparecer como filtro no topo do app.</p>
+      <p class="muted">Marque os campos que devem aparecer como filtro no topo <strong>desta pasta (${esc(cfg.sheets[sheetIdx].name)})</strong>. Cada pasta tem os seus filtros; as seleções feitas valem para todas as pastas.</p>
       ${dateCols.length ? `
         <h4>Datas</h4>
         <label class="field"><span>Coluna de data usada nos filtros</span>
@@ -1670,7 +1674,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         return item(c.name, c.name, `<small class="muted">${nf.format(k)} valores${k > 500 ? ' · mostra os 500 primeiros' : ''}${esc(tableHint(c))}</small>`);
       }).join('') || '<span class="muted">Nenhuma coluna de texto.</span>'}</div>`;
 
-    openModal('Filtros do painel', body, 'Aplicar', form => {
+    openModal('Filtros da pasta', body, 'Aplicar', form => {
       const chosen = [...form.querySelectorAll('input[name=f]:checked')].map(i => i.value);
       // mantém a ordem anterior e acrescenta os novos no fim
       cfg.filterCols = [...cfg.filterCols.filter(c => chosen.includes(c)), ...chosen.filter(c => !cfg.filterCols.includes(c))];
