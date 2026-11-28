@@ -119,13 +119,14 @@ function parse(src, columns, used = new Set()) {
   return ast;
 }
 
-function rowFn(n) {
+// G(nomeDoCampo) devolve uma função posição -> valor (ColTable.getter)
+function rowFn(n, G) {
   switch (n.t) {
     case 'num': return () => n.v;
-    case 'field': return r => r[n.name];
-    case 'neg': { const a = rowFn(n.a); return r => { const v = a(r); return typeof v === 'number' ? -v : null; }; }
+    case 'field': return G(n.name);
+    case 'neg': { const a = rowFn(n.a, G); return r => { const v = a(r); return typeof v === 'number' ? -v : null; }; }
     case 'bin': {
-      const a = rowFn(n.a), b = rowFn(n.b);
+      const a = rowFn(n.a, G), b = rowFn(n.b, G);
       return r => {
         const x = a(r), y = b(r);
         if (typeof x !== 'number' || typeof y !== 'number') return null;
@@ -135,8 +136,8 @@ function rowFn(n) {
   }
 }
 
-function aggFn(n) {
-  const f = rowFn(n.arg);
+function aggFn(n, G) {
+  const f = rowFn(n.arg, G);
   switch (n.fn) {
     case 'sum': return rows => { let s = 0; for (const r of rows) { const v = f(r); if (typeof v === 'number') s += v; } return s; };
     case 'avg': return rows => { let s = 0, c = 0; for (const r of rows) { const v = f(r); if (typeof v === 'number') { s += v; c++; } } return c ? s / c : null; };
@@ -147,13 +148,13 @@ function aggFn(n) {
   }
 }
 
-function topFn(n) {
+function topFn(n, G) {
   switch (n.t) {
     case 'num': return () => n.v;
-    case 'agg': return aggFn(n);
-    case 'neg': { const a = topFn(n.a); return rows => { const v = a(rows); return v === null ? null : -v; }; }
+    case 'agg': return aggFn(n, G);
+    case 'neg': { const a = topFn(n.a, G); return rows => { const v = a(rows); return v === null ? null : -v; }; }
     case 'bin': {
-      const a = topFn(n.a), b = topFn(n.b);
+      const a = topFn(n.a, G), b = topFn(n.b, G);
       return rows => {
         const x = a(rows), y = b(rows);
         if (x === null || y === null) return null;
@@ -172,7 +173,8 @@ function additive(n) {
 }
 
 const cache = new Map();
-// devolve { fn(rows) -> número|null, additive } ou { error }
+// devolve { bind(tabela) -> fn(posições) -> número|null, additive, fields } ou { error }
+// (tabela = ColTable; posições = lista de linhas)
 export function compile(expr, columns) {
   const key = expr + '\u0000' + columns.map(c => c.name).join('|');
   if (cache.has(key)) return cache.get(key);
@@ -181,7 +183,15 @@ export function compile(expr, columns) {
     const used = new Set();
     const ast = parse(String(expr || ''), columns, used);
     if (ast.t !== 'agg' && !JSON.stringify(ast).includes('"agg"')) throw new Error('A fórmula precisa de pelo menos uma agregação, por exemplo Sum([Valor]).');
-    out = { fn: topFn(ast), additive: additive(ast), fields: [...used] };
+    const bound = new WeakMap();
+    out = {
+      additive: additive(ast), fields: [...used],
+      bind(table) {
+        let f = bound.get(table);
+        if (!f) { f = topFn(ast, name => table.getter(name)); bound.set(table, f); }
+        return f;
+      }
+    };
   } catch (e) {
     out = { error: e.message };
   }

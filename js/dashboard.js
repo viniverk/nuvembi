@@ -6,8 +6,9 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=14';
-import { buildModel } from './model.js?v=14';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=15';
+import { buildModel } from './model.js?v=15';
+import { ColTable } from './coltable.js?v=15';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
@@ -87,22 +88,20 @@ const valueLabelsPlugin = {
 };
 
 // ---------------- configuração inicial ----------------
-function distinct(rows, col, limit = 5000) {
-  const set = new Set();
-  for (let i = 0; i < rows.length && i < limit; i++) set.add(rows[i][col]);
-  return set;
-}
+const asTable = (ds, rows) => rows instanceof ColTable ? rows : ColTable.fromRows(ds.columns || [], rows || []);
 
 export function suggestConfig(ds, rows, pref = {}) {
+  const T = asTable(ds, rows);
   const byType = t => ds.columns.filter(c => c.type === t);
   const text = byType('text'), nums = byType('number'), dates = byType('date');
-  const card = c => distinct(rows, c.name).size;
+  const card = c => T.cardinality(c.name);
   const isCode = c => /(^|_)(cod|codigo|id|nota|doc|nf|num|pedido|serie)(_|$)/i.test(c.name);
   const good = text.filter(c => !isCode(c) && card(c) > 1 && card(c) <= 60);
   const dim = pref.dim || (good.find(c => /categ|grupo|famil|segment|regiao|estado|uf|vendedor|canal|tipo/i.test(c.name))
     || good[0] || text[0] || dates[0])?.name || null;
-  const measure = pref.measure || (nums.find(c => /valor|total|venda|receita|fatur|preco|custo|saldo/i.test(c.name))
-    || nums.find(c => /qtd|quant/i.test(c.name)) || nums[0])?.name || '__count';
+  const measure = pref.measure || (nums.find(c => /valor|total|venda|receita|fatur/i.test(c.name))
+    || nums.find(c => /saldo|custo|preco|preço/i.test(c.name))
+    || nums.find(c => /qtd|quant/i.test(c.name) && !c.name.startsWith('Qtd_Registros')) || nums[0])?.name || '__count';
   const agg = pref.agg || (measure === '__count' ? 'count' : 'sum');
   const dateCol = dates[0]?.name || null;
   const filterCols = pref.filterCols || [
@@ -165,18 +164,6 @@ function normFilters(f) {
   }
   return out;
 }
-const fieldValue = (r, c, dateCol) =>
-  c === '__year' ? (r[dateCol] || '').slice(0, 4) : c === '__month' ? (r[dateCol] || '').slice(5, 7) : String(r[c] ?? '(vazio)');
-
-function applyFilters(rows, cfg, dateCol) {
-  const f = Object.entries(normFilters(cfg.filters)).map(([c, v]) => [c, new Set(v)]);
-  if (!f.length) return rows;
-  return rows.filter(r => {
-    for (const [c, set] of f) if (!set.has(fieldValue(r, c, dateCol))) return false;
-    return true;
-  });
-}
-
 function dateKey(iso, grain) {
   if (!iso) return null;
   return grain === 'year' ? iso.slice(0, 4) : grain === 'day' ? iso : iso.slice(0, 7);
@@ -194,35 +181,92 @@ const compiledOf = m => m.missing ? { error: 'excluído' } : compile(m.expr, COL
 const fmtOf = w => (w.format && w.format !== 'auto') ? w.format : (masterOf(w)?.format || 'number');
 const fv = (w, v, short) => formatValue(v, fmtOf(w), short);
 
-function aggregate(rows, keyFn, w) {
+// subconjunto de posições que passam no teste
+const subset = (idx, test) => { const out = new Uint32Array(idx.length); let k = 0; for (let j = 0; j < idx.length; j++) { const i = idx[j]; if (test(i)) out[k++] = i; } return out.subarray(0, k); };
+
+// acumula medida simples (soma/média/mín/máx/contagem) por grupo
+function simpleAcc(w) {
+  const groups = new Map();
+  return {
+    add(k, v) {
+      let a = groups.get(k);
+      if (!a) { a = { sum: 0, n: 0, cnt: 0, min: Infinity, max: -Infinity }; groups.set(k, a); }
+      a.cnt++;
+      if (typeof v === 'number' && v === v) { a.sum += v; a.n++; if (v < a.min) a.min = v; if (v > a.max) a.max = v; }
+    },
+    result: () => [...groups].map(([k, a]) => [k, accValue(a, w)])
+  };
+}
+function accValue(a, w) {
+  if (w.measure === '__count' || w.agg === 'count') return a.cnt;
+  if (!a.n) return 0;
+  return w.agg === 'avg' ? a.sum / a.n : w.agg === 'min' ? a.min : w.agg === 'max' ? a.max : a.sum;
+}
+
+// caminho geral: keyFn(posição) -> chave ou lista de chaves (dimensão vinda de outra tabela)
+function aggregate(T, idx, keyFn, w) {
   const master = masterOf(w);
   if (master) {
     const c = compiledOf(master);
+    if (c.error) return [];
+    const fn = c.bind(T);
     const groups = new Map();
-    for (const r of rows) {
-      const ks = keyFn(r);
-      for (const k of (Array.isArray(ks) ? ks : [ks])) { if (k === null) continue; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
-    }
-    return [...groups].map(([k, arr]) => [k, c.error ? null : c.fn(arr)]);
+    const put = (k, i) => { if (k === null) return; let g = groups.get(k); if (!g) { g = []; groups.set(k, g); } g.push(i); };
+    for (let j = 0; j < idx.length; j++) { const i = idx[j]; const ks = keyFn(i); if (Array.isArray(ks)) for (const k of ks) put(k, i); else put(ks, i); }
+    return [...groups].map(([k, arr]) => [k, fn(arr)]);
   }
-  const m = new Map();
-  for (const r of rows) {
-    const ks = keyFn(r);
-    const v = w.measure === '__count' ? 1 : r[w.measure];
-    for (const k of (Array.isArray(ks) ? ks : [ks])) {
-      if (k === null) continue;
-      let a = m.get(k);
-      if (!a) { a = { sum: 0, n: 0, cnt: 0, min: Infinity, max: -Infinity }; m.set(k, a); }
-      a.cnt++;
-      if (typeof v === 'number') { a.sum += v; a.n++; if (v < a.min) a.min = v; if (v > a.max) a.max = v; }
-    }
+  const get = w.measure === '__count' ? () => 1 : T.getter(w.measure);
+  const acc = simpleAcc(w);
+  for (let j = 0; j < idx.length; j++) {
+    const i = idx[j]; const ks = keyFn(i); const v = get(i);
+    if (Array.isArray(ks)) { for (const k of ks) if (k !== null) acc.add(k, v); } else if (ks !== null) acc.add(ks, v);
   }
-  const val = a => {
-    if (w.measure === '__count' || w.agg === 'count') return a.cnt;
-    if (!a.n) return 0;
-    return w.agg === 'avg' ? a.sum / a.n : w.agg === 'min' ? a.min : w.agg === 'max' ? a.max : a.sum;
-  };
-  return [...m].map(([k, a]) => [k, val(a)]);
+  return acc.result();
+}
+
+// caminho rápido: dimensão é coluna-dicionário da mesma tabela -> agrupa pelos códigos
+function aggregateByCode(T, idx, dimName, keyOfValue, w) {
+  const c = T.col(dimName);
+  const D = c.dict.length, codes = c.codes;
+  const slotOf = new Int32Array(D).fill(-1);
+  const keys = [], keyPos = new Map();
+  for (let k = 0; k < D; k++) {
+    const key = keyOfValue(c.dict[k]);
+    if (key === null) continue;
+    let sl = keyPos.get(key);
+    if (sl === undefined) { sl = keys.length; keys.push(key); keyPos.set(key, sl); }
+    slotOf[k] = sl;
+  }
+  const G = keys.length;
+  const master = masterOf(w);
+  if (master) {
+    const cc = compiledOf(master);
+    if (cc.error) return [];
+    const fn = cc.bind(T);
+    const cnt = new Uint32Array(G);
+    for (let j = 0; j < idx.length; j++) { const sl = slotOf[codes[idx[j]]]; if (sl >= 0) cnt[sl]++; }
+    const start = new Uint32Array(G + 1);
+    for (let sl = 0; sl < G; sl++) start[sl + 1] = start[sl] + cnt[sl];
+    const pos = start.slice(0, G), order = new Uint32Array(start[G]);
+    for (let j = 0; j < idx.length; j++) { const i = idx[j]; const sl = slotOf[codes[i]]; if (sl >= 0) order[pos[sl]++] = i; }
+    const out = [];
+    for (let sl = 0; sl < G; sl++) if (cnt[sl]) out.push([keys[sl], fn(order.subarray(start[sl], start[sl + 1]))]);
+    return out;
+  }
+  const num = w.measure === '__count' ? null : T.col(w.measure)?.num;
+  const get = !num && w.measure !== '__count' ? T.getter(w.measure) : null;
+  const cnt = new Float64Array(G), sum = new Float64Array(G), n = new Float64Array(G);
+  const mn = new Float64Array(G).fill(Infinity), mx = new Float64Array(G).fill(-Infinity);
+  for (let j = 0; j < idx.length; j++) {
+    const i = idx[j]; const sl = slotOf[codes[i]];
+    if (sl < 0) continue;
+    cnt[sl]++;
+    const v = num ? num[i] : get ? get(i) : NaN;
+    if (typeof v === 'number' && v === v) { sum[sl] += v; n[sl]++; if (v < mn[sl]) mn[sl] = v; if (v > mx[sl]) mx[sl] = v; }
+  }
+  const out = [];
+  for (let sl = 0; sl < G; sl++) if (cnt[sl]) out.push([keys[sl], accValue({ cnt: cnt[sl], sum: sum[sl], n: n[sl], min: mn[sl], max: mx[sl] }, w)]);
+  return out;
 }
 
 const isAdditive = w => {
@@ -231,8 +275,13 @@ const isAdditive = w => {
   return w.measure === '__count' || w.agg === 'sum' || w.agg === 'count';
 };
 const measureLabel = w => masterOf(w)?.name || (w.measure === '__count' ? 'Quantidade de linhas' : `${AGG[w.agg]} de ${w.measure}`);
-// valor único de um conjunto de linhas (KPI e comparativos)
-const valueOf = (rows, w) => { const r = aggregate(rows, () => 'all', w)[0]; return r ? r[1] : (masterOf(w) ? null : 0); };
+// valor único de um conjunto de posições (KPI e comparativos)
+function valueOf(T, idx, w) {
+  const master = masterOf(w);
+  if (master) { const c = compiledOf(master); return c.error ? null : c.bind(T)(idx); }
+  const r = aggregate(T, idx, () => 'all', w)[0];
+  return r ? r[1] : 0;
+}
 
 // ---------- comparativos de período ----------
 export const PERIODS = { all: 'Tudo (conforme filtros)', month: 'Último mês com dados', ytd: 'Acumulado do ano' };
@@ -264,14 +313,20 @@ function autoTitle(w, ds) {
 }
 
 // agrupa, ordena e limita os dados de um gráfico
-function groupData(rows, w, dimCol, valuesOf) {
+// T/idx: tabela da medida e posições selecionadas; valuesOf: dimensão vinda de outra tabela (ou null)
+function groupData(T, idx, w, dimCol, valuesOf) {
   if (!dimCol) return { labels: [], keys: [], values: [], isDate: false };
   const isDate = dimCol.type === 'date';
   const grain = w.grain || 'month';
-  valuesOf = valuesOf || (r => [r[w.dim]]);
-  let g = aggregate(rows, isDate
-    ? r => valuesOf(r).map(v => dateKey(v, grain))
-    : r => { const vs = valuesOf(r); return vs.length ? vs.map(v => v ?? '(vazio)') : ['(sem ligação)']; }, w);
+  const keyOfValue = isDate ? v => dateKey(v, grain) : v => v ?? '(vazio)';
+  let g;
+  if (!valuesOf && T.col(w.dim)?.dict) g = aggregateByCode(T, idx, w.dim, keyOfValue, w);
+  else {
+    const vals = valuesOf || (() => { const gt = T.getter(w.dim); return i => [gt(i)]; })();
+    g = aggregate(T, idx, isDate
+      ? i => vals(i).map(v => dateKey(v, grain))
+      : i => { const vs = vals(i); return vs.length ? vs.map(v => v ?? '(vazio)') : ['(sem ligação)']; }, w);
+  }
   const sort = w.sort || (isDate ? 'label' : 'desc');
   if (sort === 'label') g.sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'pt-BR', { numeric: true }));
   else g.sort((a, b) => sort === 'asc' ? a[1] - b[1] : b[1] - a[1]);
@@ -292,8 +347,8 @@ function groupData(rows, w, dimCol, valuesOf) {
 // ---------------- montagem do painel ----------------
 export function mountDashboard(el, ds, data, savedCfg, onSave) {
   const model = buildModel(ds, data);
-  const allRows = model.byId.main.rows;
-  let saved = normalizeConfig(savedCfg, ds, allRows);
+  const mainT = model.byId.main.t;
+  let saved = normalizeConfig(savedCfg, ds, mainT);
   let cfg = clone(saved);
   let editing = false;
   let dirty = false;
@@ -421,7 +476,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           <button data-sel="clear" title="Limpar todas as seleções" ${selEntries.length ? '' : 'disabled'}>⌫</button>
         </div>
         <div class="sel-items">${selChips || '<span class="sel-empty">Nenhuma seleção — clique nos gráficos ou use os filtros</span>'}</div>
-        <span class="rowcount" title="${model.multi ? esc(model.tables.map(t => `${t.name}: ${nf.format(state[t.id].length)} de ${nf.format(t.rows.length)}`).join(' · ')) : ''}">${nf.format(rows.length)} de ${nf.format(allRows.length)} linhas${model.multi ? ` · ${model.tables.length} tabelas` : ''}</span>
+        <span class="rowcount" title="${model.multi ? esc(model.tables.map(t => `${t.name}: ${nf.format(state[t.id].length)} de ${nf.format(t.n)}`).join(' · ')) : ''}">${nf.format(rows.length)} de ${nf.format(mainT.n)} linhas${model.multi ? ` · ${model.tables.length} tabelas` : ''}</span>
       </div>`;
 
     // ----- filtros (lista com seleção múltipla) -----
@@ -548,9 +603,10 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     if (w.type === 'datatable') {
       const t = model.byId[w.table] || model.byId.main;
       const tRows = ctx.state[t.id];
+      const gs = t.columns.map(c => t.t.getter(c.name));
       body.innerHTML = `<div class="table-wrap fill"><table>
         <thead><tr>${t.columns.map(c => `<th class="${c.type}">${esc(c.name)}</th>`).join('')}</tr></thead>
-        <tbody>${tRows.slice(0, 200).map(r => `<tr>${t.columns.map(c => `<td class="${c.type}">${esc(fmtCell(r[c.name], c.type))}</td>`).join('')}</tr>`).join('')}</tbody>
+        <tbody>${Array.from(tRows.subarray(0, 200), i => `<tr>${t.columns.map((c, j) => `<td class="${c.type}">${esc(fmtCell(gs[j](i), c.type))}</td>`).join('')}</tr>`).join('')}</tbody>
       </table></div>${tRows.length > 200 ? `<div class="muted small">Mostrando 200 de ${nf.format(tRows.length)} linhas. Use "Exportar CSV" para ver tudo.</div>` : ''}`;
       return;
     }
@@ -577,20 +633,20 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       const dateIn = st => { const f = model.resolver(st, mt.id, dcol); return r => f(r)[0]; };
       let v, sub = '';
       if (period === 'all') {
-        v = valueOf(rows, w);
+        v = valueOf(mt.t, rows, w);
       } else {
         // data de referência = a mais recente nas linhas filtradas
         let ref = '';
         const dNow = dateIn(ctx.state);
-        for (const r of rows) { const d = dNow(r); if (d && d > ref) ref = d; }
+        for (let j = 0; j < rows.length; j++) { const d = dNow(rows[j]); if (d && d > ref) ref = d; }
         const dAll = dateIn(ctx.stateNoDate);
         if (!ref) { body.innerHTML = '<div class="muted center small">Sem datas no filtro atual.</div>'; return; }
         const cur = periodWindow(ref, period);
-        v = valueOf(rowsNoDate.filter(r => cur.test(dAll(r))), w);
+        v = valueOf(mt.t, subset(rowsNoDate, i => cur.test(dAll(i))), w);
         sub = `<div class="kpi-period">${esc(cur.label)}</div>`;
         if (w.compare && w.compare !== 'none') {
           const prev = periodWindow(ref, period, w.compare);
-          const pv = valueOf(rowsNoDate.filter(r => prev.test(dAll(r))), w);
+          const pv = valueOf(mt.t, subset(rowsNoDate, i => prev.test(dAll(i))), w);
           const delta = (pv === null || v === null || pv === 0) ? null : (v - pv) / Math.abs(pv);
           const cls = delta === null ? '' : delta >= 0 ? 'up' : 'down';
           const deltaTxt = delta === null ? '—' : `${delta >= 0 ? '▲' : '▼'} ${formatValue(Math.abs(delta), 'percent')}`;
@@ -601,7 +657,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       return;
     }
     const dimCol = cols.find(c => c.name === w.dim);
-    const g = groupData(rows, w, dimCol, dimCol ? model.resolver(ctx.state, mt.id, w.dim) : null);
+    const g = groupData(mt.t, rows, w, dimCol, dimCol && !model.has(mt.id, w.dim) ? model.resolver(ctx.state, mt.id, w.dim) : null);
     if (!g.values.length) { body.innerHTML = '<div class="muted center">Sem dados para este filtro.</div>'; return; }
 
     if (w.type === 'table') {
@@ -732,7 +788,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         saved = clone(cfg); editing = false; dirty = false; resetUndo(); draw();
       } catch { btn.disabled = false; }
     });
-    act('export', () => exportCSV({ name: ds.name, columns: model.byId.main.columns }, model.select(cfg.filters, cfg.dateCol).main));
+    act('export', () => exportCSV(ds.name, mainT, model.select(cfg.filters, cfg.dateCol).main));
     el.querySelectorAll('[data-sel]').forEach(b => b.addEventListener('click', () => {
       const a = b.dataset.sel;
       if (a === 'clear') return setFilters({});
@@ -1004,9 +1060,9 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       let c = compile(form.mexpr.value, cols);
       const mt = !c.error && model.measureTable(c.fields, null);
       if (!c.error && !mt) c = { error: 'A fórmula mistura campos de tabelas diferentes. Use campos de uma tabela só.' };
-      const rowsNow = mt ? model.select(cfg.filters, cfg.dateCol)[mt.id] : [];
+      const rowsNow = mt ? model.select(cfg.filters, cfg.dateCol)[mt.id] : new Uint32Array(0);
       status.className = 'expr-status ' + (c.error ? 'bad' : 'ok');
-      status.textContent = c.error ? '⚠ ' + c.error : `✓ Fórmula válida${model.multi ? ` (tabela ${mt.name})` : ''} — com os filtros atuais dá ${formatValue(c.fn(rowsNow), form.mformat.value)}`;
+      status.textContent = c.error ? '⚠ ' + c.error : `✓ Fórmula válida${model.multi ? ` (tabela ${mt.name})` : ''} — com os filtros atuais dá ${formatValue(mt ? c.bind(mt.t)(rowsNow) : null, form.mformat.value)}`;
       form.querySelector('button[type=submit]').disabled = !!c.error || !form.mname.value.trim();
     };
     modal.querySelectorAll('[data-ins]').forEach(b => b.addEventListener('click', () => {
@@ -1037,7 +1093,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         <div class="check-list">${item('__year', 'Ano')}${item('__month', 'Mês')}</div>` : ''}
       <h4>Colunas</h4>
       <div class="check-list">${textCols.map(c => {
-        const k = model.distinctValues(c.name).size;
+        const k = model.cardinality(c.name);
         return item(c.name, c.name, `<small class="muted">${nf.format(k)} valores${k > 500 ? ' · mostra os 500 primeiros' : ''}${esc(tableHint(c))}</small>`);
       }).join('') || '<span class="muted">Nenhuma coluna de texto.</span>'}</div>`;
 
@@ -1094,17 +1150,25 @@ function fmtCell(v, type) {
   return v;
 }
 
-function exportCSV(ds, rows) {
-  const cols = ds.columns;
+function exportCSV(name, T, idx) {
+  const cols = T.columns;
+  const gs = cols.map(c => T.getter(c.name));
   const cell = (v, t) => {
-    const s = v == null ? '' : t === 'number' ? String(v).replace('.', ',') : t === 'date' ? fmtCell(v, t) : String(v);
-    return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    const x = v == null ? '' : t === 'number' ? String(v).replace('.', ',') : t === 'date' ? fmtCell(v, t) : String(v);
+    return /[;"\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
   };
-  const lines = [cols.map(c => cell(c.name)).join(';'), ...rows.map(r => cols.map(c => cell(r[c.name], c.type)).join(';'))];
-  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  const parts = ['\uFEFF' + cols.map(c => cell(c.name)).join(';') + '\r\n'];
+  let buf = [];
+  for (let j = 0; j < idx.length; j++) {
+    const i = idx[j];
+    buf.push(cols.map((c, k) => cell(gs[k](i), c.type)).join(';'));
+    if (buf.length === 50000) { parts.push(buf.join('\r\n') + '\r\n'); buf = []; }
+  }
+  if (buf.length) parts.push(buf.join('\r\n'));
+  const blob = new Blob(parts, { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${ds.name.replace(/[^\w\-]+/g, '_')}.csv`;
+  a.download = `${name.replace(/[^\w\-]+/g, '_')}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }

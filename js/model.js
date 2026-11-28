@@ -1,25 +1,64 @@
 // =============================================================
 //  Modelo associativo (várias tabelas ligadas, como no Qlik)
+//  — versão colunar: cada tabela é uma ColTable e as seleções são
+//  listas de posições de linha (Uint32Array).
 //
 //  - Tabelas se ligam pelos campos com o MESMO NOME (campos-chave).
-//  - Seleções em qualquer campo filtram a tabela dele e se propagam
-//    pelas chaves para as outras tabelas.
+//  - Seleções filtram a tabela do campo e se propagam pelas chaves.
 //  - Um gráfico pode usar a dimensão de uma tabela e a medida de
 //    outra: o valor da dimensão é encontrado seguindo as ligações.
 // =============================================================
+import { ColTable } from './coltable.js?v=15';
 
 export const keyOf = v => (v === null || v === undefined) ? '' : String(v);
 
-// data: array (só a tabela principal) ou { main: [...], <id>: [...] }
+// filtra posições com um teste por linha
+function filterIdx(idx, test) {
+  const out = new Uint32Array(idx.length);
+  let k = 0;
+  for (let j = 0; j < idx.length; j++) { const i = idx[j]; if (test(i)) out[k++] = i; }
+  return k === idx.length ? idx : out.slice(0, k);
+}
+
+// teste "o valor do campo está no conjunto?" usando o dicionário (rápido)
+function memberTest(t, field, accept /* (valor) => bool */) {
+  const c = t.col(field);
+  if (!c) return () => false;
+  if (c.dict) {
+    const mask = new Uint8Array(c.dict.length);
+    for (let k = 0; k < c.dict.length; k++) mask[k] = accept(c.dict[k]) ? 1 : 0;
+    const codes = c.codes;
+    return i => mask[codes[i]] === 1;
+  }
+  const a = c.num;
+  return i => { const v = a[i]; return accept(v !== v ? null : v); };
+}
+
+// valores distintos de um campo nas posições dadas (como texto, para casar chaves entre tabelas)
+function keysIn(t, field, idx) {
+  const c = t.col(field);
+  const out = new Set();
+  if (c.dict) {
+    const seen = new Uint8Array(c.dict.length), codes = c.codes;
+    for (let j = 0; j < idx.length; j++) seen[codes[idx[j]]] = 1;
+    for (let k = 0; k < seen.length; k++) if (seen[k]) out.add(keyOf(c.dict[k]));
+  } else {
+    const a = c.num;
+    for (let j = 0; j < idx.length; j++) { const v = a[idx[j]]; out.add(keyOf(v !== v ? null : v)); }
+  }
+  return out;
+}
+
+// data: { main: ColTable | linhas[], <id>: ... }
 export function buildModel(ds, data) {
-  const dataMap = Array.isArray(data) ? { main: data } : (data || {});
+  const dataMap = Array.isArray(data) || data instanceof ColTable ? { main: data } : (data || {});
+  const asTable = (v, columns) => v instanceof ColTable ? v : ColTable.fromRows(columns, v || []);
   const tables = [
-    { id: 'main', name: ds.mainName || ds.name || 'Principal', columns: ds.columns || [], rows: dataMap.main || [] },
-    ...(ds.tables || []).map(t => ({ id: t.id, name: t.name, columns: t.columns || [], rows: dataMap[t.id] || [] }))
-  ];
+    { id: 'main', name: ds.mainName || ds.name || 'Principal', columns: ds.columns || [] },
+    ...(ds.tables || []).map(t => ({ id: t.id, name: t.name, columns: t.columns || [] }))
+  ].map(t => { const ct = asTable(dataMap[t.id], t.columns); return { ...t, t: ct, n: ct.n }; });
   const byId = Object.fromEntries(tables.map(t => [t.id, t]));
 
-  // campos: união das colunas; o tipo vem da primeira tabela que tem o campo
   const fieldMap = new Map();
   for (const t of tables) for (const c of t.columns) {
     if (!fieldMap.has(c.name)) fieldMap.set(c.name, { name: c.name, type: c.type, tables: [] });
@@ -30,8 +69,7 @@ export function buildModel(ds, data) {
   const tablesOf = f => fieldMap.get(f)?.tables || [];
   const has = (tid, f) => tablesOf(f).includes(tid);
 
-  // ---------- seleções associativas ----------
-  // filters: { campo: [valores] } (+ __year/__month aplicados à coluna de data)
+  // ---------- seleções associativas -> { tabela: Uint32Array de posições } ----------
   function select(filters, dateCol) {
     const preds = [];
     for (const [f, vals] of Object.entries(filters || {})) {
@@ -40,17 +78,17 @@ export function buildModel(ds, data) {
       if (f === '__year' || f === '__month') {
         if (!dateCol) continue;
         const cut = f === '__year' ? (d => (d || '').slice(0, 4)) : (d => (d || '').slice(5, 7));
-        preds.push({ field: dateCol, test: r => set.has(cut(r[dateCol])) });
+        preds.push({ field: dateCol, accept: v => set.has(cut(v)) });
       } else {
-        preds.push({ field: f, test: r => set.has(r[f] === null || r[f] === undefined ? '(vazio)' : String(r[f])) });
+        preds.push({ field: f, accept: v => set.has(v === null || v === undefined ? '(vazio)' : String(v)) });
       }
     }
     const cur = {};
     const restricted = new Set();
     for (const t of tables) {
-      const mine = preds.filter(p => has(t.id, p.field));
-      cur[t.id] = mine.length ? t.rows.filter(r => mine.every(p => p.test(r))) : t.rows;
-      if (mine.length) restricted.add(t.id);
+      let idx = t.t.allIdx();
+      for (const p of preds) if (has(t.id, p.field)) { idx = filterIdx(idx, memberTest(t.t, p.field, p.accept)); restricted.add(t.id); }
+      cur[t.id] = idx;
     }
     // propaga pelas chaves até estabilizar (só tabelas já reduzidas restringem as outras)
     for (let loop = 0, changed = true; changed && loop < 25; loop++) {
@@ -60,20 +98,18 @@ export function buildModel(ds, data) {
         if (!rt.length) continue;
         let allowed = null;
         for (const id of rt) {
-          const s = new Set(cur[id].map(r => keyOf(r[k])));
+          const s = keysIn(byId[id].t, k, cur[id]);
           allowed = allowed ? new Set([...allowed].filter(v => s.has(v))) : s;
         }
         for (const id of tablesOf(k)) {
-          const before = cur[id].length;
-          const next = cur[id].filter(r => allowed.has(keyOf(r[k])));
-          if (next.length !== before) { cur[id] = next; restricted.add(id); changed = true; }
+          const next = filterIdx(cur[id], memberTest(byId[id].t, k, v => allowed.has(keyOf(v))));
+          if (next.length !== cur[id].length) { cur[id] = next; restricted.add(id); changed = true; }
         }
       }
     }
     return cur;
   }
 
-  // ---------- caminho entre tabelas pelas chaves ----------
   function pathTo(fromId, field) {
     if (has(fromId, field)) return [{ table: fromId }];
     const seen = new Set([fromId]);
@@ -98,30 +134,32 @@ export function buildModel(ds, data) {
     return null;
   }
 
-  // valores do campo `field` associados a uma linha da tabela `fromId` (lista; pode ser vazia)
+  // valores do campo associados a uma posição da tabela `fromId` (sempre uma lista)
   function resolver(state, fromId, field) {
     const path = pathTo(fromId, field);
     if (!path) return () => [];
-    if (path.length === 1) return r => [r[field]];
-    // de trás para frente: chave de entrada -> conjunto de valores do campo
+    if (path.length === 1) { const g = byId[fromId].t.getter(field); return i => [g(i)]; }
     let map = null;
-    for (let i = path.length - 1; i >= 1; i--) {
-      const { table, via } = path[i];
-      const outKey = i < path.length - 1 ? path[i + 1].via : null;
+    for (let s = path.length - 1; s >= 1; s--) {
+      const { table, via } = path[s];
+      const t = byId[table].t;
+      const outKey = s < path.length - 1 ? path[s + 1].via : null;
+      const gVia = t.getter(via), gOut = outKey ? t.getter(outKey) : t.getter(field);
       const m = new Map();
-      for (const r of state[table]) {
-        const vals = outKey ? (map.get(keyOf(r[outKey])) || []) : [r[field]];
-        const k = keyOf(r[via]);
-        if (!m.has(k)) m.set(k, new Set());
-        for (const v of vals) m.get(k).add(v);
+      for (const i of state[table]) {
+        const vals = outKey ? (map.get(keyOf(gOut(i))) || []) : [gOut(i)];
+        const k = keyOf(gVia(i));
+        let set = m.get(k);
+        if (!set) { set = new Set(); m.set(k, set); }
+        for (const v of vals) set.add(v);
       }
-      map = m;
+      map = new Map([...m].map(([k, set]) => [k, [...set]]));
     }
-    const first = path[1].via;
-    return r => [...(map.get(keyOf(r[first])) || [])];
+    const gFirst = byId[fromId].t.getter(path[1].via);
+    const EMPTY = [];
+    return i => map.get(keyOf(gFirst(i))) || EMPTY;
   }
 
-  // tabela onde a medida é calculada: a que tem todos os campos usados
   function measureTable(usedFields, dimField) {
     const cands = tables.filter(t => usedFields.every(f => has(t.id, f)));
     if (!cands.length) return null;
@@ -130,9 +168,10 @@ export function buildModel(ds, data) {
 
   function distinctValues(field) {
     const s = new Set();
-    for (const id of tablesOf(field)) for (const r of byId[id].rows) s.add(r[field]);
+    for (const id of tablesOf(field)) for (const v of byId[id].t.distinct(field)) s.add(v);
     return s;
   }
+  const cardinality = field => tablesOf(field).reduce((m, id) => Math.max(m, byId[id].t.cardinality(field)), 0);
 
-  return { tables, byId, fields, keys, tablesOf, has, select, resolver, pathTo, measureTable, distinctValues, multi: tables.length > 1 };
+  return { tables, byId, fields, keys, tablesOf, has, select, resolver, pathTo, measureTable, distinctValues, cardinality, multi: tables.length > 1 };
 }

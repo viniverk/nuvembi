@@ -15,7 +15,10 @@
 //  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
+import { ColTable, pack, unpack } from './coltable.js?v=15';
+
 const FB = '10.12.2';
+const BIN = 900_000;   // bytes por documento (limite do Firestore: 1 MB)
 const CHUNK_BYTES = 700_000;
 export const ROLES = { admin: 'Administrador', editor: 'Editor', viewer: 'Visualizador' };
 const ORG_KEY = 'nuvembi_org';
@@ -64,36 +67,48 @@ async function createFirebaseStore(config) {
   const chunkCol = (orgId, id) => c('orgs', orgId, 'datasets', id, 'chunks');
   const now = () => new Date().toISOString();
 
-  // grava as linhas em blocos de uma "geração"; o painel só passa a usar a geração nova no fim
-  async function writeChunks(orgId, dsId, rows, gen, onProgress, table = 'main') {
-    const chunks = chunkRows(rows);
-    for (let i = 0; i < chunks.length; i++) {
-      const cid = `${table === 'main' ? '' : table + '_'}${gen}_${String(i).padStart(4, '0')}`;
-      await F.setDoc(d('orgs', orgId, 'datasets', dsId, 'chunks', cid), { index: i, gen, table, data: JSON.stringify(chunks[i]) });
-      onProgress && onProgress((i + 1) / chunks.length);
+  // grava a tabela colunar comprimida em blocos de uma "geração"; o painel só passa a usar a geração nova no fim
+  let lastBytes = 0;
+  async function writeChunks(orgId, dsId, table, gen, onProgress, tid = 'main') {
+    const { bytes, gz } = await pack(table);
+    const n = Math.max(1, Math.ceil(bytes.length / BIN));
+    for (let i = 0; i < n; i++) {
+      const cid = `${tid === 'main' ? '' : tid + '_'}${gen}_${String(i).padStart(4, '0')}`;
+      await F.setDoc(d('orgs', orgId, 'datasets', dsId, 'chunks', cid),
+        { index: i, gen, table: tid, fmt: 'col1', gz, bin: F.Bytes.fromUint8Array(bytes.subarray(i * BIN, (i + 1) * BIN)) });
+      onProgress && onProgress((i + 1) / n);
     }
-    return chunks.length;
+    lastBytes = bytes.length;
+    return n;
   }
-  async function writeDataset(orgId, ref, meta, rows, onProgress) {
+  async function writeDataset(orgId, ref, meta, table, onProgress) {
     const gen = token(6);
-    const n = await writeChunks(orgId, ref.id, rows, gen, onProgress);
-    await F.setDoc(ref, { ...meta, chunkCount: n, gen });
+    const n = await writeChunks(orgId, ref.id, table, gen, onProgress);
+    await F.setDoc(ref, { ...meta, rowCount: table.n, chunkCount: n, gen, format: 'col1', bytes: lastBytes });
   }
 
   const tableOf = x => x.table || 'main';
-  const pick = (docs, table, gen) => docs
-    .filter(x => tableOf(x) === table && (x.gen || null) === (gen || null))   // painéis antigos não têm geração
-    .sort((a, b) => a.index - b.index)
-    .flatMap(x => JSON.parse(x.data));
-  async function loadChunks(orgId, id, gen) {
-    const snap = await F.getDocs(chunkCol(orgId, id));
-    return pick(snap.docs.map(x => x.data()), 'main', gen);
+  // monta a ColTable de uma tabela: formato colunar (bin) ou linhas JSON dos painéis antigos
+  async function pick(docs, table, gen, columns) {
+    const mine = docs.filter(x => tableOf(x) === table && (x.gen || null) === (gen || null))   // painéis antigos não têm geração
+      .sort((a, b) => a.index - b.index);
+    if (mine.length && mine[0].fmt === 'col1') {
+      const parts = mine.map(x => x.bin.toUint8Array());
+      const all = new Uint8Array(parts.reduce((t2, p2) => t2 + p2.length, 0));
+      let off = 0; for (const p2 of parts) { all.set(p2, off); off += p2.length; }
+      return unpack(all, mine[0].gz);
+    }
+    return ColTable.fromRows(columns || [], mine.flatMap(x => JSON.parse(x.data)));
   }
-  // todas as tabelas do painel: { main: [...], <id>: [...] }
+  async function loadChunks(orgId, id, meta) {
+    const snap = await F.getDocs(chunkCol(orgId, id));
+    return pick(snap.docs.map(x => x.data()), 'main', meta.gen, meta.columns);
+  }
+  // todas as tabelas do painel: { main: ColTable, <id>: ColTable }
   async function loadAllChunks(orgId, id, meta) {
     const docs = (await F.getDocs(chunkCol(orgId, id))).docs.map(x => x.data());
-    const out = { main: pick(docs, 'main', meta.gen) };
-    for (const t of meta.tables || []) out[t.id] = pick(docs, t.id, t.gen);
+    const out = { main: await pick(docs, 'main', meta.gen, meta.columns) };
+    for (const t of meta.tables || []) out[t.id] = await pick(docs, t.id, t.gen, t.columns);
     return out;
   }
   async function deleteChunks(orgId, id, keep) {
@@ -187,15 +202,15 @@ async function createFirebaseStore(config) {
       await writeDataset(org.id, ref, { ...meta, createdAt: now(), createdBy: me.email }, rows, onProgress);
       return ref.id;
     },
-    async loadRows(id) {
+    async loadRows(id) {   // tabela principal (ColTable)
       const m = await F.getDoc(dsDoc(id));
-      return loadChunks(org.id, id, m.exists() ? m.data().gen : null);
+      return loadChunks(org.id, id, m.exists() ? m.data() : {});
     },
     // troca as linhas mantendo painel, filtros e link (novos blocos -> aponta -> apaga os velhos)
-    async replaceData(id, metaPatch, rows, onProgress) {
+    async replaceData(id, metaPatch, table, onProgress) {
       const gen = token(6);
-      const n = await writeChunks(org.id, id, rows, gen, onProgress);
-      await F.updateDoc(dsDoc(id), { ...metaPatch, chunkCount: n, gen, updatedAt: now(), updatedBy: me.email });
+      const n = await writeChunks(org.id, id, table, gen, onProgress);
+      await F.updateDoc(dsDoc(id), { ...metaPatch, rowCount: table.n, chunkCount: n, gen, format: 'col1', bytes: lastBytes, updatedAt: now(), updatedBy: me.email });
       await deleteChunks(org.id, id, x => tableOf(x) !== 'main' || x.gen === gen);
     },
     async loadAll(id) {
@@ -203,19 +218,19 @@ async function createFirebaseStore(config) {
       return loadAllChunks(org.id, id, m.exists() ? m.data() : {});
     },
     // ---------- tabelas extras (modelo com várias tabelas) ----------
-    async addTable(dsId, { name, columns }, rows, onProgress) {
+    async addTable(dsId, { name, columns }, table, onProgress) {
       const tid = 't' + token(7), gen = token(6);
-      const n = await writeChunks(org.id, dsId, rows, gen, onProgress, tid);
+      const n = await writeChunks(org.id, dsId, table, gen, onProgress, tid);
       const meta = (await F.getDoc(dsDoc(dsId))).data();
-      const tables = [...(meta.tables || []), { id: tid, name, columns, rowCount: rows.length, gen, chunkCount: n, addedAt: now(), addedBy: me.email }];
+      const tables = [...(meta.tables || []), { id: tid, name, columns, rowCount: table.n, gen, chunkCount: n, bytes: lastBytes, addedAt: now(), addedBy: me.email }];
       await F.updateDoc(dsDoc(dsId), { tables, updatedAt: now(), updatedBy: me.email });
       return tables;
     },
-    async replaceTable(dsId, tid, { name, columns }, rows, onProgress) {
+    async replaceTable(dsId, tid, { name, columns }, table, onProgress) {
       const gen = token(6);
-      const n = await writeChunks(org.id, dsId, rows, gen, onProgress, tid);
+      const n = await writeChunks(org.id, dsId, table, gen, onProgress, tid);
       const meta = (await F.getDoc(dsDoc(dsId))).data();
-      const tables = (meta.tables || []).map(t => t.id === tid ? { ...t, name: name || t.name, columns, rowCount: rows.length, gen, chunkCount: n, updatedAt: now() } : t);
+      const tables = (meta.tables || []).map(t => t.id === tid ? { ...t, name: name || t.name, columns, rowCount: table.n, gen, chunkCount: n, bytes: lastBytes, updatedAt: now() } : t);
       await F.updateDoc(dsDoc(dsId), { tables, updatedAt: now(), updatedBy: me.email });
       await deleteChunks(org.id, dsId, x => tableOf(x) !== tid || x.gen === gen);
       return tables;
@@ -267,7 +282,7 @@ async function createFirebaseStore(config) {
           .docs.flatMap(ch => JSON.parse(ch.data().data));
         const ref = F.doc(dsCol());
         const { chunkCount, ...rest } = meta;
-        await writeDataset(org.id, ref, { ...rest, createdBy: me.email }, rows);
+        await writeDataset(org.id, ref, { ...rest, createdBy: me.email }, ColTable.fromRows(meta.columns || [], rows));
         n++;
       }
       await F.setDoc(d('users', me.uid), { migrated: true }, { merge: true });
@@ -313,6 +328,13 @@ function createLocalStore() {
   const emit = () => listeners.forEach(cb => cb(me));
   const now = () => new Date().toISOString();
   const deny = () => { throw Object.assign(new Error('Sem permissão'), { code: 'permission-denied' }); };
+  // tabelas guardadas comprimidas no IndexedDB (formato novo) ou como linhas (antigo)
+  const putTable = async (key, table) => { const { bytes, gz } = await pack(table); await set(key, { fmt: 'col1', gz, bin: bytes }); };
+  const getTable = async (key, columns) => {
+    const v = await get(key);
+    if (v && v.fmt === 'col1') return unpack(v.bin, v.gz);
+    return ColTable.fromRows(columns || [], v || []);
+  };
   const myRole = async orgId => (await getMap('members:' + orgId))[me.uid]?.role;
   const needEdit = async () => { if (!['admin', 'editor'].includes(await myRole(org.id))) deny(); };
   const needAdmin = async () => { if ((await myRole(org.id)) !== 'admin') deny(); };
@@ -391,39 +413,42 @@ function createLocalStore() {
       const list = (await get('datasets:' + org.id)) || [];
       return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
-    async saveDataset(meta, rows, onProgress) {
+    async saveDataset(meta, table, onProgress) {
       await needEdit();
       const id = 'ds_' + Date.now().toString(36);
-      await set(`rows:${org.id}:${id}`, rows);
+      await putTable(`rows:${org.id}:${id}`, table);
       const list = (await get('datasets:' + org.id)) || [];
-      list.push({ id, ...meta, createdAt: now(), createdBy: me.email });
+      list.push({ id, ...meta, rowCount: table.n, format: 'col1', createdAt: now(), createdBy: me.email });
       await set('datasets:' + org.id, list);
       onProgress && onProgress(1);
       return id;
     },
-    async loadRows(id) { return (await get(`rows:${org.id}:${id}`)) || []; },
+    async loadRows(id) {
+      const ds = ((await get('datasets:' + org.id)) || []).find(x => x.id === id) || {};
+      return getTable(`rows:${org.id}:${id}`, ds.columns);
+    },
     async loadAll(id) {
       const ds = ((await get('datasets:' + org.id)) || []).find(x => x.id === id) || {};
-      const out = { main: (await get(`rows:${org.id}:${id}`)) || [] };
-      for (const t of ds.tables || []) out[t.id] = (await get(`rows:${org.id}:${id}:${t.id}`)) || [];
+      const out = { main: await getTable(`rows:${org.id}:${id}`, ds.columns) };
+      for (const t of ds.tables || []) out[t.id] = await getTable(`rows:${org.id}:${id}:${t.id}`, t.columns);
       return out;
     },
-    async addTable(dsId, { name, columns }, rows, onProgress) {
+    async addTable(dsId, { name, columns }, table, onProgress) {
       await needEdit();
       const tid = 't' + token(7);
-      await set(`rows:${org.id}:${dsId}:${tid}`, rows);
+      await putTable(`rows:${org.id}:${dsId}:${tid}`, table);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === dsId);
-      ds.tables = [...(ds.tables || []), { id: tid, name, columns, rowCount: rows.length, addedAt: now(), addedBy: me.email }];
+      ds.tables = [...(ds.tables || []), { id: tid, name, columns, rowCount: table.n, addedAt: now(), addedBy: me.email }];
       await set('datasets:' + org.id, list); onProgress && onProgress(1);
       return ds.tables;
     },
-    async replaceTable(dsId, tid, { name, columns }, rows, onProgress) {
+    async replaceTable(dsId, tid, { name, columns }, table, onProgress) {
       await needEdit();
-      await set(`rows:${org.id}:${dsId}:${tid}`, rows);
+      await putTable(`rows:${org.id}:${dsId}:${tid}`, table);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === dsId);
-      ds.tables = (ds.tables || []).map(t => t.id === tid ? { ...t, name: name || t.name, columns, rowCount: rows.length, updatedAt: now() } : t);
+      ds.tables = (ds.tables || []).map(t => t.id === tid ? { ...t, name: name || t.name, columns, rowCount: table.n, updatedAt: now() } : t);
       await set('datasets:' + org.id, list); onProgress && onProgress(1);
       return ds.tables;
     },
@@ -436,11 +461,11 @@ function createLocalStore() {
       await set('datasets:' + org.id, list);
       return ds.tables;
     },
-    async replaceData(id, metaPatch, rows, onProgress) {
+    async replaceData(id, metaPatch, table, onProgress) {
       await needEdit();
-      await set(`rows:${org.id}:${id}`, rows);
+      await putTable(`rows:${org.id}:${id}`, table);
       const list = (await get('datasets:' + org.id)) || [];
-      Object.assign(list.find(x => x.id === id), metaPatch, { updatedAt: now(), updatedBy: me.email });
+      Object.assign(list.find(x => x.id === id), metaPatch, { rowCount: table.n, format: 'col1', updatedAt: now(), updatedBy: me.email });
       await set('datasets:' + org.id, list);
       onProgress && onProgress(1);
     },
@@ -479,8 +504,8 @@ function createLocalStore() {
       if (!s) return null;
       const ds = ((await get('datasets:' + s.orgId)) || []).find(x => x.id === s.datasetId);
       if (!ds || ds.shareId !== t) return null;
-      const data = { main: (await get(`rows:${s.orgId}:${s.datasetId}`)) || [] };
-      for (const t of ds.tables || []) data[t.id] = (await get(`rows:${s.orgId}:${s.datasetId}:${t.id}`)) || [];
+      const data = { main: await getTable(`rows:${s.orgId}:${s.datasetId}`, ds.columns) };
+      for (const t of ds.tables || []) data[t.id] = await getTable(`rows:${s.orgId}:${s.datasetId}:${t.id}`, t.columns);
       return { ds, data };
     },
 

@@ -1,17 +1,19 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=14';
-import { createStore, ROLES } from './store.js?v=14';
-import { readFile, normalizeRows } from './parser.js?v=14';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=14';
-import { buildModel } from './model.js?v=14';
-import { summarize, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=14';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=15';
+import { createStore, ROLES } from './store.js?v=15';
+import { readFile, normalizeRows } from './parser.js?v=15';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=15';
+import { buildModel } from './model.js?v=15';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=15';
+import { ColTable } from './coltable.js?v=15';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const nf = new Intl.NumberFormat('pt-BR');
 const TYPE_LABEL = { text: 'Texto', number: 'Número', date: 'Data' };
+const PREVIEW_ROWS = 5000;   // linhas lidas do QVD para a prévia e detecção de tipos
 
 let store, user, workspace = { orgs: [], invites: [] };
 const rowsCache = new Map();
@@ -311,12 +313,13 @@ function openRefresh(ds) {
     const same = mapped.filter(c => c.matched), extra = mapped.filter(c => !c.matched);
     const missing = ds.columns.filter(o => !mapped.some(c => c.name === o.name) && !(ds.summary && o.name.startsWith(COUNT_FIELD)));
     const append = back.querySelector('input[name=rmode]:checked').value === 'append';
-    const total = append ? ds.rowCount + sheet.data.length : sheet.data.length;
+    const fileRows = sheet.total || sheet.data.length;
+    const total = append ? ds.rowCount + fileRows : fileRows;
     summary.innerHTML = `
       ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="rsheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
       <div class="refresh-summary">
         <div><strong>${nf.format(sheet.total || sheet.data.length)}</strong> linhas no arquivo → ${ds.summary ? 'serão resumidas como na importação' : `o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas`}
-          ${append ? `<span class="muted">(${nf.format(ds.rowCount)} atuais + ${nf.format(sheet.data.length)} novas)</span>` : ''}</div>
+          ${append ? `<span class="muted">(${nf.format(ds.rowCount)} atuais + ${nf.format(fileRows)} novas)</span>` : ''}</div>
         <div class="ok-text">✓ ${same.length} coluna(s) iguais às do painel</div>
         ${extra.length ? (ds.summary ? `<div class="muted">Ignoradas no resumo: ${extra.map(c => esc(c.name)).join(', ')}</div>` : `<div>+ ${extra.length} coluna(s) nova(s): ${extra.map(c => esc(c.name)).join(', ')}</div>`) : ''}
         ${missing.length ? `<div class="warn-text">⚠ Não encontradas na planilha: ${missing.map(c => esc(c.name)).join(', ')}.${append ? ' As linhas novas ficam sem esses valores.' : ' Gráficos e filtros que usam essas colunas vão ficar vazios.'}</div>` : ''}
@@ -333,7 +336,7 @@ function openRefresh(ds) {
     const file = e.target.files[0];
     if (!file) return;
     summary.innerHTML = `<div class="muted">Lendo ${esc(file.name)}…</div>`;
-    try { sheets = await readFile(file, { maxRows: MAX_ROWS + 1 }); }
+    try { sheets = await readFile(file, { maxRows: PREVIEW_ROWS }); }
     catch (err) { console.error(err); summary.innerHTML = `<div class="error">Não consegui ler este arquivo.</div>`; return; }
     if (!sheets.length) { summary.innerHTML = '<div class="error">O arquivo está vazio.</div>'; return; }
     // escolhe a aba que mais combina com as colunas do painel
@@ -349,25 +352,25 @@ function openRefresh(ds) {
     try {
       go.textContent = ds.summary ? 'Resumindo…' : 'Preparando…';
       await new Promise(r => setTimeout(r, 30));
-      let rows, columns;
+      let table, columns;
       if (ds.summary) {
         const keep = ds.summary.keep.filter(n => mapped.some(c => c.name === n));
         const r = summarize(sheet, mapped, { ...ds.summary, keep });
-        rows = r.rows; columns = r.columns;
+        table = r.table; columns = r.columns;
       } else {
-        rows = normalizeRows(mapped, sheet.data);
+        table = ingest(sheet, mapped, { limit: MAX_ROWS }).table;
         columns = mapped.map(({ name, type }) => ({ name, type }));
       }
       if (append) {
         const old = rowsCache.get(ds.id)?.main || await store.loadRows(ds.id);
-        rows = old.concat(rows);
         columns = [...ds.columns, ...columns.filter(c => !ds.columns.some(o => o.name === c.name))];
+        table = ColTable.concat(old, table, columns);
       }
-      rows = rows.slice(0, MAX_ROWS);
-      await store.replaceData(ds.id, { columns, rowCount: rows.length }, rows, p => (go.textContent = `Enviando… ${Math.round(p * 100)}%`));
+      table = table.slice(MAX_ROWS);
+      await store.replaceData(ds.id, { columns, rowCount: table.n }, table, p => (go.textContent = `Enviando… ${Math.round(p * 100)}%`));
       rowsCache.delete(ds.id);
       close();
-      toast(`Dados atualizados: ${nf.format(rows.length)} linhas.`);
+      toast(`Dados atualizados: ${nf.format(table.n)} linhas.`);
       if (location.hash === `#/painel/${encodeURIComponent(ds.id)}`) showDashboard(ds.id); else location.hash = `#/painel/${encodeURIComponent(ds.id)}`;
     } catch (err) {
       console.error(err); toast('Não foi possível atualizar os dados.', 'err');
@@ -413,7 +416,7 @@ function modelSvg(model) {
       <rect x="${b.x}" y="${b.y}" width="${W}" height="${HEAD - 6}" rx="10" class="mhead ${b.t.id === 'main' ? 'main' : ''}"/>
       <rect x="${b.x}" y="${b.y + HEAD - 16}" width="${W}" height="10" class="mhead ${b.t.id === 'main' ? 'main' : ''}"/>
       <text x="${b.x + 12}" y="${b.y + 22}" class="mtitle">${esc(b.t.name.length > 22 ? b.t.name.slice(0, 21) + '…' : b.t.name)}</text>
-      <text x="${b.x + W - 12}" y="${b.y + 22}" text-anchor="end" class="mcount">${nf.format(b.t.rows.length)}</text>
+      <text x="${b.x + W - 12}" y="${b.y + 22}" text-anchor="end" class="mcount">${nf.format(b.t.n)}</text>
       ${b.shown.map((c, i) => `<text x="${b.x + 14}" y="${b.y + HEAD + i * ROWH + 14}" class="mfield ${keys.has(c.name) ? 'key' : ''}">${keys.has(c.name) ? '🔑 ' : ''}${esc(c.name.length > 26 ? c.name.slice(0, 25) + '…' : c.name)}</text>`).join('')}
       ${b.t.columns.length > MAXF ? `<text x="${b.x + 14}" y="${b.y + HEAD + MAXF * ROWH + 14}" class="mmore">+ ${b.t.columns.length - MAXF} campos</text>` : ''}
     </g>`).join('');
@@ -434,7 +437,7 @@ function openModel(ds, data) {
         <div class="table-list">${model.tables.map(t => `
           <div class="tl-item">
             <div><strong>${esc(t.name)}</strong> ${t.id === 'main' ? '<span class="tag">principal</span>' : ''}
-              <small class="muted">${nf.format(t.rows.length)} linhas · ${t.columns.length} campos · ${linksOf(t).length ? 'liga por ' + linksOf(t).map(esc).join(', ') : '<span class="warn-text">sem ligação</span>'}</small></div>
+              <small class="muted">${nf.format(t.n)} linhas · ${t.columns.length} campos · ${linksOf(t).length ? 'liga por ' + linksOf(t).map(esc).join(', ') : '<span class="warn-text">sem ligação</span>'}</small></div>
             ${canEdit() && t.id !== 'main' ? `<div class="row-actions"><button class="btn ghost small" data-tupd="${t.id}">⟳ Atualizar</button><button class="btn ghost small danger" data-tdel="${t.id}">Remover</button></div>` : ''}
           </div>`).join('')}</div>
         ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar tabela</button>' : ''}
@@ -538,7 +541,7 @@ function openAddTable(ds, data, existing = null) {
     const file = e.target.files[0];
     if (!file) return;
     body.innerHTML = `<div class="muted">Lendo ${esc(file.name)}…</div>`;
-    try { sheets = await readFile(file, { maxRows: MAX_ROWS + 1 }); } catch (err) { console.error(err); body.innerHTML = '<div class="error">Não consegui ler este arquivo.</div>'; return; }
+    try { sheets = await readFile(file, { maxRows: PREVIEW_ROWS }); } catch (err) { console.error(err); body.innerHTML = '<div class="error">Não consegui ler este arquivo.</div>'; return; }
     if (!sheets.length) { body.innerHTML = '<div class="error">O arquivo está vazio.</div>'; return; }
     back.querySelector('.small-drop strong').textContent = file.name;
     setSheet(sheets[0]);
@@ -549,7 +552,7 @@ function openAddTable(ds, data, existing = null) {
     // nomes que batem com campos de outras tabelas usam a grafia exata (para ligar)
     const final = cols.map(c => { const f = findField(c.name); return { index: c.index, name: f ? f.name : c.name.trim(), type: c.type }; });
     try {
-      const rows = normalizeRows(final, sheet.data.slice(0, MAX_ROWS));
+      const rows = ingest(sheet, final, { limit: MAX_ROWS }).table;
       const columns = final.map(({ name: n, type }) => ({ name: n, type }));
       const prog = p => (go.textContent = `Enviando… ${Math.round(p * 100)}%`);
       ds.tables = existing ? await store.replaceTable(ds.id, existing.id, { name, columns }, rows, prog)
@@ -592,7 +595,7 @@ async function handleFile(file) {
   const preview = document.getElementById('preview');
   preview.innerHTML = `<div class="card loading">Lendo ${esc(file.name)}…</div>`;
   let sheets;
-  try { sheets = await readFile(file, { maxRows: MAX_ROWS + 1 }); }
+  try { sheets = await readFile(file, { maxRows: PREVIEW_ROWS }); }
   catch (e) { console.error(e); preview.innerHTML = `<div class="card error">Não consegui ler este arquivo. ${esc(e.message || '')}</div>`; return; }
   if (!sheets.length) { preview.innerHTML = `<div class="card error">O arquivo está vazio.</div>`; return; }
 
@@ -666,8 +669,8 @@ async function handleFile(file) {
 
     const out = preview.querySelector('#sum-out');
     const showResult = r => {
-      const ok = r.rows.length <= MAX_ROWS;
-      out.innerHTML = `${nf.format(r.used)} linhas${r.used < r.read ? ` (de ${nf.format(r.read)}, filtradas pela data)` : ''} → <strong class="${ok ? 'ok-text' : 'error'}">${nf.format(r.rows.length)} linhas resumidas</strong>${ok ? '' : ` — ainda passa de ${nf.format(MAX_ROWS)}: desmarque campos detalhados ou agrupe as datas por mês`}`;
+      const ok = r.rowCount <= MAX_ROWS;
+      out.innerHTML = `${nf.format(r.used)} linhas${r.used < r.read ? ` (de ${nf.format(r.read)}, filtradas pela data)` : ''} → <strong class="${ok ? 'ok-text' : 'error'}">${nf.format(r.rowCount)} linhas resumidas</strong>${ok ? '' : ` — ainda passa de ${nf.format(MAX_ROWS)}: desmarque campos detalhados ou agrupe as datas por mês`}`;
     };
     const calc = () => new Promise(res => {
       out.textContent = 'Resumindo… arquivos grandes levam alguns segundos.';
@@ -697,23 +700,26 @@ async function handleFile(file) {
       const prog = preview.querySelector('#progress');
       prog.textContent = 'Preparando dados…';
       try {
-        let rows, columns, summary = null;
+        let table, columns, summary = null;
         if (sumOn) {
           if (!sumKeep.length) throw Object.assign(new Error('Escolha pelo menos um campo para manter.'), { user: true });
           const r = await calc();
           if (!r) throw new Error('resumo');
-          if (r.rows.length > MAX_ROWS) throw Object.assign(new Error(`O resumo ainda tem ${nf.format(r.rows.length)} linhas. Desmarque campos detalhados ou agrupe as datas por mês.`), { user: true });
-          rows = r.rows; columns = r.columns;
+          if (r.rowCount > MAX_ROWS) throw Object.assign(new Error(`O resumo ainda tem ${nf.format(r.rowCount)} linhas. Desmarque campos detalhados ou agrupe as datas por mês.`), { user: true });
+          table = r.table; columns = r.columns;
           summary = { keep: sumKeep, grains: sumGrains, from: sumFrom, dateCol: sumDateCol, sourceRows: r.read };
         } else {
-          rows = normalizeRows(sheet.columns, sheet.data.slice(0, MAX_ROWS));
+          prog.textContent = 'Lendo o arquivo inteiro…';
+          await new Promise(res => setTimeout(res, 30));
+          table = ingest(sheet, sheet.columns, { limit: MAX_ROWS }).table;
           columns = sheet.columns.map(({ name, type }) => ({ name, type }));
         }
-        const meta = { name, source, columns, rowCount: rows.length };
+        const meta = { name, source, columns, rowCount: table.n };
         if (summary) meta.summary = summary;
-        meta.dashboard = suggestConfig(meta, rows);
-        const id = await store.saveDataset(meta, rows, p => (prog.textContent = `Enviando… ${Math.round(p * 100)}%`));
-        rowsCache.set(id, { main: rows });
+        meta.dashboard = suggestConfig(meta, table);
+        prog.textContent = 'Compactando…';
+        const id = await store.saveDataset(meta, table, p => (prog.textContent = `Enviando… ${Math.round(p * 100)}%`));
+        rowsCache.set(id, { main: table });
         toast('Painel criado!');
         location.hash = `#/painel/${encodeURIComponent(id)}`;
       } catch (err) {

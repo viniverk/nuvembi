@@ -62,7 +62,7 @@ Entre com qualquer e-mail e uma senha de 6+ caracteres, vá em **Importar dados*
 > Alternativa: **Firebase Hosting** (`npm i -g firebase-tools`, `firebase init hosting`, `firebase deploy`).
 
 ## Limites do MVP
-- Até 100 mil linhas por importação (ajuste `MAX_ROWS` em `firebase-config.js`).
+- Até 3 milhões de linhas por painel (ajuste `MAX_ROWS` em `firebase-config.js`), guardadas em formato colunar comprimido (como o QVD): 1,2 milhão de linhas ≈ 11 MB.
 - Os cálculos rodam no navegador do cliente: ótimo até algumas centenas de milhares de linhas.
 - Plano gratuito do Firestore: 1 GiB armazenado e 50 mil leituras/dia — suficiente para os primeiros clientes.
 

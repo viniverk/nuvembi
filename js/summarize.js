@@ -5,8 +5,30 @@
 //  Datas podem ser agrupadas por mês ou ano; dá para importar só
 //  a partir de uma data.
 // =============================================================
-import { parseQVD } from './qvd.js?v=14';
-import { normalizeValue } from './parser.js?v=14';
+import { parseQVD } from './qvd.js?v=15';
+import { normalizeValue } from './parser.js?v=15';
+import { ColTable } from './coltable.js?v=15';
+
+// percorre todas as linhas do arquivo (QVD em fluxo, sem carregar tudo; Excel/CSV da memória)
+function eachRow(sheet, visit) {
+  if (sheet.qvd) parseQVD(sheet.qvd, { onRow: visit });
+  else sheet.data.forEach(visit);
+}
+
+// importa o arquivo inteiro direto para tabela colunar (sem resumir)
+// columns: [{ index, name, type }] · limit: máximo de linhas
+export function ingest(sheet, columns, { limit = Infinity } = {}) {
+  const b = ColTable.builder(columns.map(({ name, type }) => ({ name, type })));
+  const vals = new Array(columns.length);
+  let read = 0;
+  eachRow(sheet, arr => {
+    read++;
+    if (b.size >= limit) return;
+    for (let j = 0; j < columns.length; j++) vals[j] = normalizeValue(columns[j].type, arr[columns[j].index]);
+    b.push(vals);
+  });
+  return { table: b.finish(), read };
+}
 
 export const COUNT_FIELD = 'Qtd_Registros';
 export const SUM_GRAINS = { day: 'Dia', month: 'Mês', year: 'Ano' };
@@ -43,20 +65,15 @@ export function summarize(sheet, columns, opts) {
       if (typeof v === 'number') g.sums[i] = (g.sums[i] || 0) + v;
     }
   };
-  if (sheet.qvd) parseQVD(sheet.qvd, { onRow: visit });
-  else sheet.data.forEach(visit);
+  eachRow(sheet, visit);
 
   let countName = COUNT_FIELD;
   while (kept.some(c => c.name === countName)) countName += '_';
-  const rows = [...groups.values()].map(g => {
-    const o = {};
-    dims.forEach((c, i) => (o[c.name] = g.dv[i]));
-    meas.forEach((c, i) => (o[c.name] = g.sums[i] === null ? null : Math.round(g.sums[i] * 1e6) / 1e6));
-    o[countName] = g.n;
-    return o;
-  });
-  return {
-    rows, read, used,
-    columns: [...dims, ...meas].map(({ name, type }) => ({ name, type })).concat({ name: countName, type: 'number' })
-  };
+  const columnsOut = [...dims, ...meas].map(({ name, type }) => ({ name, type })).concat({ name: countName, type: 'number' });
+  const b = ColTable.builder(columnsOut);
+  for (const g of groups.values()) {
+    b.push([...g.dv, ...g.sums.map(v => v === null ? null : Math.round(v * 1e6) / 1e6), g.n]);
+  }
+  const table = b.finish();
+  return { table, rowCount: table.n, read, used, columns: columnsOut };
 }

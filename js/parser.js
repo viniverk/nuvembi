@@ -10,7 +10,7 @@
 const DATE_HINT = /(^|_)(data|dt|emis|emissao|venc|vencto|vencimento|dtdigit|entrega)|data|^dt/i;
 const CODE_HINT = /(^|_)(cod|codigo|id|cnpj|cpf|cep|filial|fil|nota|doc|nf|serie|pedido|num|loja|tel|fone)(_|$)/i;
 
-import { parseQVD } from './qvd.js?v=14';
+import { parseQVD } from './qvd.js?v=15';
 
 // ---------- leitura do arquivo ----------
 export async function readFile(file, { maxRows = Infinity } = {}) {

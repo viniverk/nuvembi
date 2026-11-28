@@ -22,5 +22,5 @@ export const firebaseConfig = {
 // Nome do produto exibido no site (troque à vontade)
 export const APP_NAME = "Nuvem BI";
 
-// Limite de linhas por importação no MVP
-export const MAX_ROWS = 100000;
+// Limite de linhas por painel (formato colunar comprimido, calculado no navegador)
+export const MAX_ROWS = 3000000;
