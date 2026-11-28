@@ -632,3 +632,27 @@ body.busy, body.busy * { cursor: progress !important; }
 .dash-fs .widget.fs-target .kpi-val { font-size: 72px; }
 .dash-fs .widget.fs-target .gauge { width: min(100%, 900px); margin: 0 auto; }
 .dash-fs .widget.fs-target .gauge-val { font-size: 56px; }
+
+/* ---------- espaços ---------- */
+.space-bar { display: flex; gap: .4rem; flex-wrap: wrap; margin: 0 0 1rem; }
+.sp-chip { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: .35rem .8rem; font: inherit; font-size: 13px; cursor: pointer; color: var(--text); }
+.sp-chip small { color: var(--muted); margin-left: .2rem; }
+.sp-chip:hover { border-color: var(--primary); }
+.sp-chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.sp-chip.on small { color: #dbeafe; }
+.space-title { font-size: 16px; margin: 1.25rem 0 .6rem; display: flex; align-items: center; gap: .5rem; }
+.space-title:first-of-type { margin-top: .25rem; }
+.sp-role { font-size: 11px; font-weight: 600; background: #eef2ff; color: #4338ca; border-radius: 999px; padding: .05rem .5rem; }
+.space-empty { padding: .8rem 1rem; margin-bottom: .5rem; }
+.sp-tag { font-size: 12px; font-weight: 600; color: #4338ca; background: #eef2ff; border-radius: 999px; padding: .1rem .55rem; margin-left: .35rem; vertical-align: middle; }
+.modal-wide { width: min(760px, 96vw); }
+.sp-new { display: flex; gap: .5rem; margin: .75rem 0 1rem; }
+.sp-new input { flex: 1; }
+.sp-card { border: 1px solid var(--line); border-radius: 12px; padding: .75rem .9rem; margin-bottom: .75rem; }
+.sp-head { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }
+.sp-name { flex: 1; font-weight: 700; font-size: 15px; border: 1px solid transparent; background: transparent; padding: .3rem .4rem; border-radius: 8px; }
+.sp-name:hover, .sp-name:focus { border-color: var(--line); background: #fff; }
+.sp-members { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sp-members td { padding: .3rem .25rem; border-top: 1px solid #f1f5f9; }
+.sp-members td:last-child { text-align: right; }
+.sp-members select { min-width: 0; padding: .25rem .4rem; }

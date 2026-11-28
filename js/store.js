@@ -15,7 +15,7 @@
 //  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
-import { ColTable, pack, unpack } from './coltable.js?v=29';
+import { ColTable, pack, unpack } from './coltable.js?v=30';
 
 const FB = '10.12.2';
 const BIN = 900_000;   // bytes por documento (limite do Firestore: 1 MB)
@@ -81,10 +81,12 @@ async function createFirebaseStore(config) {
     lastBytes = bytes.length;
     return n;
   }
+  // cria o app primeiro (as regras conferem o espaço dele) e só depois grava os blocos de dados
   async function writeDataset(orgId, ref, meta, table, onProgress) {
     const gen = token(6);
+    await F.setDoc(ref, { ...meta, rowCount: 0, chunkCount: 0, gen: null, format: 'col1', loading: true });
     const n = await writeChunks(orgId, ref.id, table, gen, onProgress);
-    await F.setDoc(ref, { ...meta, rowCount: table.n, chunkCount: n, gen, format: 'col1', bytes: lastBytes });
+    await F.updateDoc(ref, { rowCount: table.n, chunkCount: n, gen, bytes: lastBytes, loading: F.deleteField() });
   }
 
   const tableOf = x => x.table || 'main';
@@ -140,7 +142,7 @@ async function createFirebaseStore(config) {
         const o = await F.getDoc(d('orgs', id)).catch(() => null);
         const name = (o && o.exists() && o.data().name) || cachedName;
         if (name !== cachedName) F.setDoc(d('users', me.uid), { orgs: { [id]: name } }, { merge: true }).catch(() => {});
-        orgs.push({ id, name, role: m.data().role });
+        orgs.push({ id, name, role: m.data().role, spacesOn: !!(o && o.exists() && o.data().spacesOn) });
       }
       const inv = await F.getDocs(F.query(c('invites'), F.where('email', '==', me.email)));
       const invites = inv.docs.map(x => ({ id: x.id, ...x.data() }));
@@ -194,13 +196,54 @@ async function createFirebaseStore(config) {
 
     // ---------- painéis ----------
     async listDatasets() {
-      const snap = await F.getDocs(F.query(dsCol(), F.orderBy('createdAt', 'desc')));
-      return snap.docs.map(x => ({ id: x.id, ...x.data() }));
+      const rows = snap => snap.docs.map(x => ({ id: x.id, ...x.data() }));
+      // sem espaços (ou admin): lista tudo, como antes
+      if (!org.spacesOn || org.role === 'admin') return rows(await F.getDocs(F.query(dsCol(), F.orderBy('createdAt', 'desc'))));
+      // com espaços: área Geral + os espaços de que a pessoa participa (o servidor garante o resto)
+      const spaces = await this.listSpaces().catch(() => []);
+      const snaps = await Promise.all([
+        F.getDocs(F.query(dsCol(), F.where('spaceId', '==', null))),
+        ...spaces.map(sp => F.getDocs(F.query(dsCol(), F.where('spaceId', '==', sp.id))))
+      ]);
+      return snaps.flatMap(rows).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     },
+    // ---------- espaços (Comercial, Compras, Diretoria…) ----------
+    async listSpaces() {
+      const col = c('orgs', org.id, 'spaces');
+      const snap = await F.getDocs(org.role === 'admin' ? col : F.query(col, F.where('memberUids', 'array-contains', me.uid)));
+      return snap.docs.map(x => ({ id: x.id, roles: {}, ...x.data() })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    },
+    // 1º espaço da empresa: marca todos os apps como "Geral" e liga os espaços (só o admin)
+    async enableSpaces() {
+      if (org.spacesOn) return;
+      const all = await F.getDocs(dsCol());
+      await Promise.all(all.docs.filter(x => !('spaceId' in x.data())).map(x => F.updateDoc(x.ref, { spaceId: null })));
+      await F.updateDoc(d('orgs', org.id), { spacesOn: true });
+      org.spacesOn = true;
+    },
+    async createSpace(name) {
+      // cria o espaço primeiro: se as regras do servidor ainda não aceitam espaços, falha aqui sem mudar nada
+      const ref = F.doc(c('orgs', org.id, 'spaces'));
+      await F.setDoc(ref, { name, roles: {}, memberUids: [], createdAt: now(), createdBy: me.email });
+      await this.enableSpaces();
+      return ref.id;
+    },
+    async renameSpace(id, name) { await F.updateDoc(d('orgs', org.id, 'spaces', id), { name }); },
+    async deleteSpace(id) {   // os apps do espaço voltam para Geral
+      const apps = await F.getDocs(F.query(dsCol(), F.where('spaceId', '==', id)));
+      await Promise.all(apps.docs.map(x => F.updateDoc(x.ref, { spaceId: null })));
+      await F.deleteDoc(d('orgs', org.id, 'spaces', id));
+    },
+    async setSpaceRole(id, uid, role) {   // role: 'editor' | 'viewer' | null (sem acesso)
+      await F.updateDoc(d('orgs', org.id, 'spaces', id), role
+        ? { ['roles.' + uid]: role, memberUids: F.arrayUnion(uid) }
+        : { ['roles.' + uid]: F.deleteField(), memberUids: F.arrayRemove(uid) });
+    },
+    async moveApp(dsId, spaceId) { await F.updateDoc(dsDoc(dsId), { spaceId: spaceId || null, updatedAt: now(), updatedBy: me.email }); },
     // app vazio: as tabelas entram depois pelo Gerenciador de dados
-    async createApp(name) {
+    async createApp(name, spaceId) {
       const ref = F.doc(dsCol());
-      await F.setDoc(ref, { name, source: 'app', columns: [], rowCount: 0, tables: [], createdAt: now(), createdBy: me.email });
+      await F.setDoc(ref, { name, source: 'app', columns: [], rowCount: 0, tables: [], spaceId: spaceId || null, createdAt: now(), createdBy: me.email });
       return ref.id;
     },
     async renameTable(dsId, tid, name) {
@@ -214,7 +257,7 @@ async function createFirebaseStore(config) {
     },
     async saveDataset(meta, rows, onProgress) {
       const ref = F.doc(dsCol());
-      await writeDataset(org.id, ref, { ...meta, createdAt: now(), createdBy: me.email }, rows, onProgress);
+      await writeDataset(org.id, ref, { spaceId: null, ...meta, createdAt: now(), createdBy: me.email }, rows, onProgress);
       return ref.id;
     },
     async loadRows(id) {   // tabela principal (ColTable)
@@ -299,7 +342,7 @@ async function createFirebaseStore(config) {
           .docs.flatMap(ch => JSON.parse(ch.data().data));
         const ref = F.doc(dsCol());
         const { chunkCount, ...rest } = meta;
-        await writeDataset(org.id, ref, { ...rest, createdBy: me.email }, ColTable.fromRows(meta.columns || [], rows));
+        await writeDataset(org.id, ref, { ...rest, spaceId: null, createdBy: me.email }, ColTable.fromRows(meta.columns || [], rows));
         n++;
       }
       await F.setDoc(d('users', me.uid), { migrated: true }, { merge: true });
@@ -355,6 +398,14 @@ function createLocalStore() {
   const myRole = async orgId => (await getMap('members:' + orgId))[me.uid]?.role;
   const needEdit = async () => { if (!['admin', 'editor'].includes(await myRole(org.id))) deny(); };
   const needAdmin = async () => { if ((await myRole(org.id)) !== 'admin') deny(); };
+  // mesma regra do servidor: app em espaço = admin da empresa ou "editor" do espaço; Geral = papel na empresa
+  const needWrite = async spaceId => {
+    if (!spaceId) return needEdit();
+    if ((await myRole(org.id)) === 'admin') return;
+    const sp = (await getMap('spaces:' + org.id))[spaceId];
+    if (sp?.roles?.[me.uid] !== 'editor') deny();
+  };
+  const needEditApp = async dsId => needWrite(((await get('datasets:' + org.id)) || []).find(x => x.id === dsId)?.spaceId);
 
   const login = email => {
     me = { uid: lower(email), email: lower(email) }; org = null;
@@ -378,7 +429,7 @@ function createLocalStore() {
       const allOrgs = await getMap('orgs');
       for (const [id, cachedName] of Object.entries(index)) {
         const role = await myRole(id);
-        if (role) orgs.push({ id, name: allOrgs[id]?.name || cachedName, role });
+        if (role) orgs.push({ id, name: allOrgs[id]?.name || cachedName, role, spacesOn: !!allOrgs[id]?.spacesOn });
       }
       const invites = Object.entries(await getMap('invites')).filter(([, v]) => v.email === me.email).map(([id, v]) => ({ id, ...v }));
       return { orgs, invites };
@@ -427,37 +478,82 @@ function createLocalStore() {
     async removeMember(uid) { await needAdmin(); const m = await getMap('members:' + org.id); delete m[uid]; await set('members:' + org.id, m); },
 
     async listDatasets() {
-      const list = (await get('datasets:' + org.id)) || [];
+      let list = (await get('datasets:' + org.id)) || [];
+      if (org.spacesOn && org.role !== 'admin') {
+        const mine = new Set((await this.listSpaces()).map(sp => sp.id));
+        list = list.filter(x => !x.spaceId || mine.has(x.spaceId));
+      }
       return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },
-    async createApp(name) {
-      await needEdit();
+    async listSpaces() {
+      const all = Object.entries(await getMap('spaces:' + org.id)).map(([id, v]) => ({ id, roles: {}, ...v }));
+      const mine = org.role === 'admin' ? all : all.filter(sp => (sp.memberUids || []).includes(me.uid));
+      return mine.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    },
+    async enableSpaces() {
+      if (org.spacesOn) return;
+      const orgs = await getMap('orgs');
+      orgs[org.id] = { ...(orgs[org.id] || {}), spacesOn: true }; await set('orgs', orgs);
+      org.spacesOn = true;
+    },
+    async createSpace(name) {
+      await needAdmin(); await this.enableSpaces();
+      const id = 'sp_' + token(7);
+      const m = await getMap('spaces:' + org.id);
+      m[id] = { name, roles: {}, memberUids: [], createdAt: now(), createdBy: me.email };
+      await set('spaces:' + org.id, m);
+      return id;
+    },
+    async renameSpace(id, name) { await needAdmin(); const m = await getMap('spaces:' + org.id); m[id].name = name; await set('spaces:' + org.id, m); },
+    async deleteSpace(id) {
+      await needAdmin();
+      const list = (await get('datasets:' + org.id)) || [];
+      list.forEach(x => { if (x.spaceId === id) x.spaceId = null; });
+      await set('datasets:' + org.id, list);
+      const m = await getMap('spaces:' + org.id); delete m[id]; await set('spaces:' + org.id, m);
+    },
+    async setSpaceRole(id, uid, role) {
+      await needAdmin();
+      const m = await getMap('spaces:' + org.id), sp = m[id];
+      sp.roles = { ...(sp.roles || {}) };
+      if (role) { sp.roles[uid] = role; sp.memberUids = [...new Set([...(sp.memberUids || []), uid])]; }
+      else { delete sp.roles[uid]; sp.memberUids = (sp.memberUids || []).filter(u => u !== uid); }
+      await set('spaces:' + org.id, m);
+    },
+    async moveApp(dsId, spaceId) {
+      await needEditApp(dsId); await needWrite(spaceId);
+      const list = (await get('datasets:' + org.id)) || [];
+      list.find(x => x.id === dsId).spaceId = spaceId || null;
+      await set('datasets:' + org.id, list);
+    },
+    async createApp(name, spaceId) {
+      await needWrite(spaceId);
       const id = 'ds_' + Date.now().toString(36);
       const list = (await get('datasets:' + org.id)) || [];
-      list.push({ id, name, source: 'app', columns: [], rowCount: 0, tables: [], createdAt: now(), createdBy: me.email });
+      list.push({ id, name, source: 'app', columns: [], rowCount: 0, tables: [], spaceId: spaceId || null, createdAt: now(), createdBy: me.email });
       await set('datasets:' + org.id, list);
       return id;
     },
     async renameTable(dsId, tid, name) {
-      await needEdit();
+      await needEditApp(dsId);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === dsId);
       if (tid === 'main') ds.mainName = name; else ds.tables = (ds.tables || []).map(t => t.id === tid ? { ...t, name } : t);
       await set('datasets:' + org.id, list);
     },
     async clearMain(dsId) {
-      await needEdit();
+      await needEditApp(dsId);
       await del(`rows:${org.id}:${dsId}`);
       const list = (await get('datasets:' + org.id)) || [];
       Object.assign(list.find(x => x.id === dsId), { columns: [], rowCount: 0, updatedAt: now() });
       await set('datasets:' + org.id, list);
     },
     async saveDataset(meta, table, onProgress) {
-      await needEdit();
+      await needWrite(meta.spaceId);
       const id = 'ds_' + Date.now().toString(36);
       await putTable(`rows:${org.id}:${id}`, table);
       const list = (await get('datasets:' + org.id)) || [];
-      list.push({ id, ...meta, rowCount: table.n, format: 'col1', createdAt: now(), createdBy: me.email });
+      list.push({ id, spaceId: null, ...meta, rowCount: table.n, format: 'col1', createdAt: now(), createdBy: me.email });
       await set('datasets:' + org.id, list);
       onProgress && onProgress(1);
       return id;
@@ -473,7 +569,7 @@ function createLocalStore() {
       return out;
     },
     async addTable(dsId, { name, columns }, table, onProgress) {
-      await needEdit();
+      await needEditApp(dsId);
       const tid = 't' + token(7);
       await putTable(`rows:${org.id}:${dsId}:${tid}`, table);
       const list = (await get('datasets:' + org.id)) || [];
@@ -483,7 +579,7 @@ function createLocalStore() {
       return ds.tables;
     },
     async replaceTable(dsId, tid, { name, columns }, table, onProgress) {
-      await needEdit();
+      await needEditApp(dsId);
       await putTable(`rows:${org.id}:${dsId}:${tid}`, table);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === dsId);
@@ -492,7 +588,7 @@ function createLocalStore() {
       return ds.tables;
     },
     async removeTable(dsId, tid) {
-      await needEdit();
+      await needEditApp(dsId);
       await del(`rows:${org.id}:${dsId}:${tid}`);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === dsId);
@@ -501,7 +597,7 @@ function createLocalStore() {
       return ds.tables;
     },
     async replaceData(id, metaPatch, table, onProgress) {
-      await needEdit();
+      await needEditApp(id);
       await putTable(`rows:${org.id}:${id}`, table);
       const list = (await get('datasets:' + org.id)) || [];
       Object.assign(list.find(x => x.id === id), metaPatch, { rowCount: table.n, format: 'col1', updatedAt: now(), updatedBy: me.email });
@@ -509,19 +605,19 @@ function createLocalStore() {
       onProgress && onProgress(1);
     },
     async saveScript(id, patch) {
-      await needEdit();
+      await needEditApp(id);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === id);
       if (ds) { Object.assign(ds, patch); ds.updatedAt = now(); await set('datasets:' + org.id, list); }
     },
     async updateDashboard(id, dashboard) {
-      await needEdit();
+      await needEditApp(id);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === id);
       if (ds) { ds.dashboard = dashboard; await set('datasets:' + org.id, list); }
     },
     async deleteDataset(id) {
-      await needEdit();
+      await needEditApp(id);
       const list = (await get('datasets:' + org.id)) || [];
       const ds = list.find(x => x.id === id);
       if (ds?.shareId) { const s = await getMap('shares'); delete s[ds.shareId]; await set('shares', s); }
@@ -531,7 +627,7 @@ function createLocalStore() {
     },
 
     async createShare(ds) {
-      await needEdit();
+      await needEditApp(ds.id);
       const t = token();
       const s = await getMap('shares'); s[t] = { orgId: org.id, datasetId: ds.id, name: ds.name, createdBy: me.email, createdAt: now() }; await set('shares', s);
       const list = (await get('datasets:' + org.id)) || [];
@@ -539,7 +635,7 @@ function createLocalStore() {
       return t;
     },
     async revokeShare(ds) {
-      await needEdit();
+      await needEditApp(ds.id);
       const s = await getMap('shares'); delete s[ds.shareId]; await set('shares', s);
       const list = (await get('datasets:' + org.id)) || [];
       delete list.find(x => x.id === ds.id).shareId; await set('datasets:' + org.id, list);

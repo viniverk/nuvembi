@@ -13,6 +13,24 @@ service cloud.firestore {
     function dsPath(org, ds) { return /databases/$(database)/documents/orgs/$(org)/datasets/$(ds); }
     function isShared(org, ds) { return get(dsPath(org, ds)).data.get('shareId', null) != null; }
 
+    // ---------- espaços ----------
+    // A empresa liga os espaços quando o admin cria o primeiro (orgs/{org}.spacesOn = true).
+    // App sem espaço (spaceId null) = área Geral: vale o papel da pessoa na empresa.
+    // App num espaço: admin da empresa tem acesso total; os outros precisam ser membros do espaço
+    // (roles[uid] = 'viewer' só vê; 'editor' edita).
+    function orgPath(org) { return /databases/$(database)/documents/orgs/$(org); }
+    function spacesOn(org) { return get(orgPath(org)).data.get('spacesOn', false) == true; }
+    function spaceRole(org, sp) {
+      return get(/databases/$(database)/documents/orgs/$(org)/spaces/$(sp)).data.roles.get(request.auth.uid, null);
+    }
+    function spaceOf(d) { return d.get('spaceId', null); }
+    function canReadApp(org, d) {
+      return isMember(org) && (!spacesOn(org) || spaceOf(d) == null || isAdmin(org) || spaceRole(org, spaceOf(d)) != null);
+    }
+    function canWriteApp(org, d) {
+      return spaceOf(d) == null ? canEdit(org) : (isAdmin(org) || (isMember(org) && spaceRole(org, spaceOf(d)) == 'editor'));
+    }
+
     // Índice das empresas do usuário + formato antigo (users/{uid}/datasets)
     match /users/{uid}/{document=**} {
       allow read, write: if signedIn() && request.auth.uid == uid;
@@ -39,13 +57,26 @@ service cloud.firestore {
         allow delete: if isAdmin(org) || (signedIn() && uid == request.auth.uid);
       }
 
+      // Espaços: o admin cria e define quem participa; cada um lê os espaços de que participa
+      match /spaces/{sp} {
+        allow read: if isAdmin(org) || (isMember(org) && request.auth.uid in resource.data.memberUids);
+        allow create, update, delete: if isAdmin(org);
+      }
+
       match /datasets/{ds} {
-        allow read: if isMember(org) || resource.data.get('shareId', null) != null;
-        allow create, update, delete: if canEdit(org);
+        // abrir um app: membro com acesso ao espaço do app, ou link público
+        allow get: if canReadApp(org, resource.data) || resource.data.get('shareId', null) != null;
+        // listar: admin vê tudo; os outros listam a área Geral e cada espaço de que participam
+        allow list: if isMember(org) && (!spacesOn(org) || isAdmin(org)
+          || resource.data.spaceId == null || spaceRole(org, resource.data.spaceId) != null);
+        allow create: if canWriteApp(org, request.resource.data);
+        // mover de espaço exige poder editar na origem e no destino
+        allow update: if canWriteApp(org, resource.data) && canWriteApp(org, request.resource.data);
+        allow delete: if canWriteApp(org, resource.data);
 
         match /chunks/{chunk} {
-          allow read: if isMember(org) || isShared(org, ds);
-          allow write: if canEdit(org);
+          allow read: if canReadApp(org, get(dsPath(org, ds)).data) || isShared(org, ds);
+          allow write: if canWriteApp(org, get(dsPath(org, ds)).data);
         }
       }
     }

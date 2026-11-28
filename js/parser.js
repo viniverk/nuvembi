@@ -17,7 +17,7 @@ export const isCodeName = name => {
   return words.some(w => CODE_WORDS.has(w));
 };
 
-import { parseQVD } from './qvd.js?v=29';
+import { parseQVD } from './qvd.js?v=30';
 
 // ---------- leitura do arquivo ----------
 export async function readFile(file, { maxRows = Infinity } = {}) {

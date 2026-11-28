@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=29';
-import { createStore, ROLES } from './store.js?v=29';
-import { readFile, normalizeRows } from './parser.js?v=29';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=29';
-import { buildModel } from './model.js?v=29';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=29';
-import { ColTable } from './coltable.js?v=29';
-import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=29';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=30';
+import { createStore, ROLES } from './store.js?v=30';
+import { readFile, normalizeRows } from './parser.js?v=30';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=30';
+import { buildModel } from './model.js?v=30';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=30';
+import { ColTable } from './coltable.js?v=30';
+import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=30';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -21,6 +21,24 @@ const rowsCache = new Map();
 const role = () => store.org?.role;
 const canEdit = () => ['admin', 'editor'].includes(role());
 const isAdmin = () => role() === 'admin';
+// ---------- espaços: permissão de cada app ----------
+let spaces = [];   // espaços que a pessoa enxerga (admin: todos)
+async function refreshSpaces() { try { spaces = await store.listSpaces(); } catch (e) { console.warn('espaços indisponíveis', e); spaces = []; } return spaces; }
+const myUid = () => store.me?.uid;
+const mySpaceRole = sp => sp?.roles?.[myUid()] || null;
+const spaceById = id => spaces.find(x => x.id === id);
+const spaceName = id => id ? (spaceById(id)?.name || 'Espaço restrito') : 'Geral';
+// app da área Geral: vale o papel na empresa; app num espaço: admin da empresa ou "editor" do espaço
+const canEditApp = ds => !ds?.spaceId ? canEdit() : isAdmin() || mySpaceRole(spaceById(ds.spaceId)) === 'editor';
+// onde a pessoa pode criar/mover apps
+const writableSpaces = () => [...(canEdit() ? [{ id: '', name: 'Geral' }] : []), ...spaces.filter(sp => isAdmin() || mySpaceRole(sp) === 'editor')];
+const canCreate = () => writableSpaces().length > 0;
+const spaceSelect = (name, selected) => {
+  const opts = writableSpaces();
+  if (!spaces.length) return '';
+  return `<label class="field"><span>Espaço</span><select name="${name}" id="${name}">${opts.map(o => `<option value="${esc(o.id)}" ${o.id === (selected || '') ? 'selected' : ''}>${o.id ? '▣ ' : ''}${esc(o.name)}</option>`).join('')}</select></label>`;
+};
+const currentSpaceFilter = () => { try { return sessionStorage.getItem('nbi-space') || 'all'; } catch { return 'all'; } };
 const publicToken = () => { const m = location.hash.match(/^#\/p\/([\w-]+)/); return m ? m[1] : null; };
 
 init();
@@ -212,7 +230,7 @@ function shell(active, title, content, actions = '') {
       </div>
       <nav>
         ${item('', '▦ Meus apps', 'home')}
-        ${canEdit() ? item('importar', '⇪ Importar arquivo', 'upload') : ''}
+        ${canCreate() ? item('importar', '⇪ Importar arquivo', 'upload') : ''}
         ${item('equipe', '👥 Equipe', 'team')}
         ${item('conectores', '⛁ Conectores', 'connectors')}
       </nav>
@@ -243,9 +261,12 @@ function shell(active, title, content, actions = '') {
 
 // ---------------- Home ----------------
 async function showHome() {
+  await refreshSpaces();
   const view = shell('home', 'Meus apps', '<div class="loading">Carregando…</div>',
-    canEdit() ? `<button class="btn" id="btn-newapp">+ Novo app</button>` : '');
+    (isAdmin() ? `<button class="btn ghost" id="btn-spaces">▣ Espaços</button>` : '')
+    + (canCreate() ? `<button class="btn" id="btn-newapp">+ Novo app</button>` : ''));
   document.getElementById('btn-newapp')?.addEventListener('click', openNewApp);
+  document.getElementById('btn-spaces')?.addEventListener('click', openSpaces);
   let list = [];
   try { list = await store.listDatasets(); }
   catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar seus dados.</div>`; return; }
@@ -256,15 +277,30 @@ async function showHome() {
     view.innerHTML = `${invitesBanner}
       <div class="empty card">
         <div class="empty-icon">▦</div>
-        <h2>${canEdit() ? 'Você ainda não tem apps' : 'Nenhum app ainda'}</h2>
-        <p>${canEdit() ? `Importe uma planilha de vendas, estoque ou compras e o ${APP_NAME} monta o app para você.` : 'Quando alguém da sua empresa criar um app, ele aparece aqui.'}</p>
-        ${canEdit() ? '<div class="row-actions center-actions"><button class="btn" data-newapp>+ Novo app</button><a class="btn ghost" href="#/importar">Importar uma planilha</a></div>' : ''}
+        <h2>${canCreate() ? 'Você ainda não tem apps' : 'Nenhum app ainda'}</h2>
+        <p>${canCreate() ? `Importe uma planilha de vendas, estoque ou compras e o ${APP_NAME} monta o app para você.` : 'Quando alguém da sua empresa criar um app, ele aparece aqui.'}</p>
+        ${canCreate() ? '<div class="row-actions center-actions"><button class="btn" data-newapp>+ Novo app</button><a class="btn ghost" href="#/importar">Importar uma planilha</a></div>' : ''}
       </div>`;
     bindInviteButtons(view);
     view.querySelector('[data-newapp]')?.addEventListener('click', openNewApp);
     return;
   }
-  view.innerHTML = `${invitesBanner}<div class="grid">${list.map(d => `
+  // barra de espaços (Todos · Geral · cada espaço) e apps agrupados por espaço
+  let filter = currentSpaceFilter();
+  if (filter !== 'all' && filter !== 'general' && !spaceById(filter)) filter = 'all';
+  const groups = [{ id: '', name: 'Geral', apps: list.filter(d => !d.spaceId) },
+    ...spaces.map(sp => ({ id: sp.id, name: sp.name, sp, apps: list.filter(d => d.spaceId === sp.id) })),
+    ...[...new Set(list.filter(d => d.spaceId && !spaceById(d.spaceId)).map(d => d.spaceId))].map(id => ({ id, name: 'Espaço restrito', apps: list.filter(d => d.spaceId === id) }))];
+  const shown = groups.filter(g => filter === 'all' ? g.apps.length : (filter === 'general' ? g.id === '' : g.id === filter));
+  const roleTag = g => !g.id ? '' : isAdmin() ? '<span class="sp-role">admin</span>' : `<span class="sp-role">${mySpaceRole(g.sp) === 'editor' ? 'edita' : 'visualiza'}</span>`;
+  const spaceBar = spaces.length ? `<div class="space-bar">
+      <button type="button" class="sp-chip ${filter === 'all' ? 'on' : ''}" data-spf="all">Todos <small>${list.length}</small></button>
+      ${groups.map(g => `<button type="button" class="sp-chip ${(g.id ? filter === g.id : filter === 'general') ? 'on' : ''}" data-spf="${g.id || 'general'}">${g.id ? '▣ ' : ''}${esc(g.name)} <small>${g.apps.length}</small></button>`).join('')}
+    </div>` : '';
+  view.innerHTML = `${invitesBanner}${spaceBar}${shown.map(g => `
+    ${spaces.length ? `<h2 class="space-title">${g.id ? '▣ ' : ''}${esc(g.name)} ${roleTag(g)} <small class="muted">${g.apps.length} app(s)</small></h2>` : ''}
+    ${g.apps.length ? '' : `<div class="card muted small space-empty">Nenhum app neste espaço ainda.${writableSpaces().some(o => o.id === g.id) ? ' Use + Novo app ou mova um app para cá.' : ''}</div>`}
+    <div class="grid">${g.apps.map(d => `
     <article class="ds card">
       <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : d.source === 'qvd' ? 'QVD' : d.source === 'app' ? 'APP' : 'XLS'}</span>
         <div><h3>${esc(d.name)}</h3><small>${new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</small></div>
@@ -273,10 +309,13 @@ async function showHome() {
       <div class="tags">${d.columns.slice(0, 5).map(c => `<span class="tag ${c.type}">${esc(c.name)}</span>`).join('')}${d.columns.length > 5 ? `<span class="tag">+${d.columns.length - 5}</span>` : ''}</div>
       <div class="ds-actions">
         <a class="btn small" href="#/painel/${encodeURIComponent(d.id)}">Abrir app</a>
-        ${canEdit() ? `<a class="btn ghost small" href="#/dados/${encodeURIComponent(d.id)}">🗄 Dados</a>` : ''}
-        ${canEdit() ? `<button class="btn ghost small danger" data-del="${esc(d.id)}" data-name="${esc(d.name)}">Excluir</button>` : ''}
+        ${canEditApp(d) ? `<a class="btn ghost small" href="#/dados/${encodeURIComponent(d.id)}">🗄 Dados</a>` : ''}
+        ${canEditApp(d) && spaces.length && writableSpaces().length > 1 ? `<button class="btn ghost small" data-move="${esc(d.id)}" title="Mover para outro espaço">↪ Espaço</button>` : ''}
+        ${canEditApp(d) ? `<button class="btn ghost small danger" data-del="${esc(d.id)}" data-name="${esc(d.name)}">Excluir</button>` : ''}
       </div>
-    </article>`).join('')}</div>`;
+    </article>`).join('')}</div>`).join('')}`;
+  view.querySelectorAll('[data-spf]').forEach(b => b.addEventListener('click', () => { try { sessionStorage.setItem('nbi-space', b.dataset.spf); } catch {} showHome(); }));
+  view.querySelectorAll('[data-move]').forEach(b => b.addEventListener('click', () => openMoveApp(list.find(d => d.id === b.dataset.move))));
 
   view.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     if (!confirm(`Excluir o app "${b.dataset.name}" e todos os seus dados? Isso não pode ser desfeito.`)) return;
@@ -288,6 +327,99 @@ async function showHome() {
   view.querySelectorAll('[data-refresh]').forEach(b => b.addEventListener('click', () => openRefresh(list.find(d => d.id === b.dataset.refresh))));
 }
 
+// espaço sugerido para um app novo: o espaço aberto na tela inicial (se a pessoa pode criar nele)
+function defaultSpaceForNew() {
+  const f = currentSpaceFilter();
+  const w = writableSpaces();
+  const id = f === 'general' || f === 'all' ? '' : f;
+  return w.some(o => o.id === id) ? id : (w[0]?.id || '');
+}
+
+// ---------------- Espaços (admin) ----------------
+async function openSpaces() {
+  let members = [];
+  try { members = await store.listMembers(); } catch (e) { console.error(e); }
+  await refreshSpaces();
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  const roleSel = (sp, m) => m.role === 'admin'
+    ? '<span class="muted small">Admin da empresa · acesso total</span>'
+    : `<select data-sprole="${esc(sp.id)}" data-uid="${esc(m.uid)}">
+        <option value="" ${!sp.roles?.[m.uid] ? 'selected' : ''}>Sem acesso</option>
+        <option value="viewer" ${sp.roles?.[m.uid] === 'viewer' ? 'selected' : ''}>Visualizar</option>
+        <option value="editor" ${sp.roles?.[m.uid] === 'editor' ? 'selected' : ''}>Editar</option></select>`;
+  const paint = () => {
+    back.innerHTML = `
+      <div class="modal card modal-wide">
+        <header><h2>▣ Espaços</h2><button type="button" class="x" data-close>×</button></header>
+        <div class="modal-body">
+          <p class="muted">Agrupe os apps em espaços (ex.: Comercial, Compras, Diretoria) e escolha quem participa de cada um. Quem não participa <strong>não vê</strong> os apps do espaço. Apps fora de espaços ficam em <strong>Geral</strong>, visíveis para toda a empresa.</p>
+          <form class="sp-new"><input name="spname" maxlength="40" placeholder="Nome do novo espaço (ex.: Comercial)" required><button class="btn">+ Criar espaço</button></form>
+          ${spaces.length ? spaces.map(sp => `
+            <section class="sp-card">
+              <div class="sp-head"><input class="sp-name" data-spren="${esc(sp.id)}" value="${esc(sp.name)}" maxlength="40" title="Clique para renomear">
+                <button type="button" class="btn ghost small danger" data-spdel="${esc(sp.id)}">Excluir espaço</button></div>
+              <table class="sp-members"><tbody>${members.map(m => `<tr><td>${esc(m.email || m.uid)}</td><td>${roleSel(sp, m)}</td></tr>`).join('')}</tbody></table>
+            </section>`).join('') : '<p class="muted">Nenhum espaço ainda.</p>'}
+          <p class="muted small">Papéis no espaço: <strong>Visualizar</strong> abre e filtra os apps; <strong>Editar</strong> também cria, altera, atualiza dados e exclui apps do espaço. Convide pessoas para a empresa na tela Equipe.</p>
+        </div>
+      </div>`;
+    back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+    back.querySelector('.sp-new').addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = e.target.spname.value.trim(); if (!name) return;
+      try { await store.createSpace(name); await refreshSpaces(); toast(`Espaço "${name}" criado.`); paint(); }
+      catch (err) { spaceError(err); }
+    });
+    back.querySelectorAll('[data-spren]').forEach(inp => inp.addEventListener('change', async () => {
+      const name = inp.value.trim(); if (!name) return;
+      try { await store.renameSpace(inp.dataset.spren, name); await refreshSpaces(); toast('Espaço renomeado.'); }
+      catch (err) { spaceError(err); }
+    }));
+    back.querySelectorAll('[data-spdel]').forEach(b => b.addEventListener('click', async () => {
+      const sp = spaceById(b.dataset.spdel);
+      if (!confirm(`Excluir o espaço "${sp.name}"? Os apps dele voltam para Geral (visíveis para toda a empresa).`)) return;
+      try { await store.deleteSpace(sp.id); await refreshSpaces(); rowsCache.clear(); toast('Espaço excluído.'); paint(); }
+      catch (err) { spaceError(err); }
+    }));
+    back.querySelectorAll('[data-sprole]').forEach(sel => sel.addEventListener('change', async () => {
+      try { await store.setSpaceRole(sel.dataset.sprole, sel.dataset.uid, sel.value || null); await refreshSpaces(); toast('Acesso atualizado.'); }
+      catch (err) { spaceError(err); }
+    }));
+  };
+  const close = () => { back.remove(); showHome(); };
+  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+  document.body.append(back);
+  paint();
+}
+function spaceError(err) {
+  console.error(err);
+  toast(err?.code === 'permission-denied' ? 'O servidor recusou: as regras de segurança ainda não foram atualizadas para espaços.' : 'Não foi possível salvar o espaço.', 'err');
+}
+function openMoveApp(ds) {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <form class="modal card">
+      <header><h2>Mover "${esc(ds.name)}"</h2><button type="button" class="x" data-close>×</button></header>
+      <div class="modal-body">
+        ${spaceSelect('space', ds.spaceId || '')}
+        <p class="muted small">O app passa a seguir o acesso do espaço de destino. Seleções, pastas, script e link compartilhado continuam iguais.</p>
+      </div>
+      <footer><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn">Mover</button></footer>
+    </form>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+  back.querySelector('form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const to = e.target.space.value || null;
+    if ((ds.spaceId || null) === to) { close(); return; }
+    try { await store.moveApp(ds.id, to); close(); toast(`App movido para ${spaceName(to)}.`); showHome(); }
+    catch (err) { spaceError(err); }
+  });
+}
+
 // ---------------- Novo app ----------------
 function openNewApp() {
   const back = document.createElement('div');
@@ -297,6 +429,7 @@ function openNewApp() {
       <header><h2>Novo app</h2><button type="button" class="x" data-close>×</button></header>
       <div class="modal-body">
         <label class="field"><span>Nome do app</span><input name="name" required maxlength="60" placeholder="Ex.: Compras 2026"></label>
+        ${spaceSelect('space', defaultSpaceForNew())}
         <div class="newapp-options">
           <button type="submit" class="newapp-opt"><strong>🗄 App vazio</strong><span>Crie o app e adicione várias tabelas (Excel, CSV, QVD) no Gerenciador de dados.</span></button>
           <a class="newapp-opt" href="#/importar" data-close><strong>⇪ A partir de um arquivo</strong><span>Escolha uma planilha ou QVD e o app já sai com um painel pronto.</span></a>
@@ -312,7 +445,9 @@ function openNewApp() {
     e.preventDefault();
     const name = form.name.value.trim();
     if (!name) return;
-    try { const id = await store.createApp(name); close(); toast('App criado.'); location.hash = `#/dados/${encodeURIComponent(id)}`; }
+    const sp = form.space ? form.space.value : '';
+    try { sessionStorage.setItem('nbi-new-space', sp); } catch {}
+    try { const id = await store.createApp(name, sp || null); close(); toast('App criado.'); location.hash = `#/dados/${encodeURIComponent(id)}`; }
     catch (err) { console.error(err); toast('Não foi possível criar o app.', 'err'); }
   });
   setTimeout(() => form.name.focus(), 30);
@@ -628,8 +763,9 @@ function openAddTable(ds, data, existing = null) {
 }
 
 // ---------------- Importar ----------------
-function showUpload() {
-  if (!canEdit()) { location.hash = '#/'; return; }
+async function showUpload() {
+  await refreshSpaces();
+  if (!canCreate()) { location.hash = '#/'; return; }
   const view = shell('upload', 'Importar dados', `
     <div class="card">
       <label class="drop" id="drop">
@@ -717,6 +853,7 @@ async function handleFile(file) {
     preview.innerHTML = `
       <div class="card">
         <div class="preview-head">
+          ${spaceSelect('ds-space', defaultSpaceForNew())}
           <label class="field grow"><span>Nome do app</span><input id="ds-name" value="${esc(sheets.length > 1 ? `${baseName} - ${sheet.name}` : baseName)}"></label>
           ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="sheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         </div>
@@ -795,7 +932,7 @@ async function handleFile(file) {
           table = ingest(sheet, active(), { limit: MAX_ROWS }).table;
           columns = active().map(({ name, type }) => ({ name, type }));
         }
-        const meta = { name, source, columns, rowCount: table.n };
+        const meta = { name, source, columns, rowCount: table.n, spaceId: document.getElementById('ds-space')?.value || null };
         if (summary) meta.summary = summary;
         meta.dashboard = suggestConfig(meta, table);
         prog.textContent = 'Compactando…';
@@ -823,6 +960,7 @@ function afterDataChange(id) {
 }
 
 async function loadApp(id) {
+  await refreshSpaces();
   const list = await store.listDatasets();
   const ds = list.find(d => d.id === id);
   if (!ds) return null;
@@ -858,7 +996,7 @@ const scriptErrorCard = (ds, m) => `
   <div class="card error-card">
     <h2>⚠ O script de carga deste app tem um erro</h2>
     <p class="error">${esc(m.error)}${m.result?.line ? ` (linha ${m.result.line})` : ''}</p>
-    ${canEdit() ? `<a class="btn" href="#/script/${encodeURIComponent(ds.id)}">Abrir o Editor de script</a>` : '<p class="muted">Peça para quem edita o app corrigir o script.</p>'}
+    ${canEditApp(ds) ? `<a class="btn" href="#/script/${encodeURIComponent(ds.id)}">Abrir o Editor de script</a>` : '<p class="muted">Peça para quem edita o app corrigir o script.</p>'}
   </div>`;
 
 // navegação do app: Analisar (pastas) · Preparar (gerenciador de dados, editor de script)
@@ -877,7 +1015,7 @@ function appNav(view, ds, active) {
 
 async function showDashboard(id) {
   const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost small" href="#/" title="Voltar para Meus apps">← Apps</a>${canEdit() ? '<button class="btn ghost small" id="btn-share">🔗 Compartilhar</button>' : ''}`);
+    `<a class="btn ghost small" href="#/" title="Voltar para Meus apps">← Apps</a><button class="btn ghost small" id="btn-share" hidden>🔗 Compartilhar</button>`);
   let app;
   try { app = await loadApp(id); }
   catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }
@@ -885,7 +1023,9 @@ async function showDashboard(id) {
   const { ds, data } = app;
   document.querySelector('.topbar h1').textContent = ds.name;
   appNav(view, ds, 'analisar');
-  document.getElementById('btn-share')?.addEventListener('click', () => openShare(ds));
+  const shareBtn = document.getElementById('btn-share');
+  if (shareBtn && canEditApp(ds)) { shareBtn.hidden = false; shareBtn.addEventListener('click', () => openShare(ds)); }
+  if (ds.spaceId) document.querySelector('.topbar h1').insertAdjacentHTML('beforeend', ` <small class="sp-tag">▣ ${esc(spaceName(ds.spaceId))}</small>`);
   const m = appModel(ds, data);
   if (m.error) { view.innerHTML = scriptErrorCard(ds, m); return; }
   if (buildModel(m.ds, m.data).empty) {
@@ -894,11 +1034,11 @@ async function showDashboard(id) {
         <div class="empty-icon">🗄</div>
         <h2>Este app ainda não tem dados</h2>
         <p>Adicione planilhas Excel, CSV ou arquivos QVD no Gerenciador de dados. Tabelas com campos de mesmo nome se ligam sozinhas.</p>
-        ${canEdit() ? `<a class="btn" href="#/dados/${encodeURIComponent(ds.id)}">Ir para o Gerenciador de dados</a>` : ''}
+        ${canEditApp(ds) ? `<a class="btn" href="#/dados/${encodeURIComponent(ds.id)}">Ir para o Gerenciador de dados</a>` : ''}
       </div>`;
     return;
   }
-  mountDashboard(view, m.ds, m.data, ds.dashboard, canEdit() ? async cfg => {
+  mountDashboard(view, m.ds, m.data, ds.dashboard, canEditApp(ds) ? async cfg => {
     try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; m.ds.dashboard = cfg; toast('App salvo.'); }
     catch (e) { console.error(e); toast('Erro ao salvar o app.', 'err'); throw e; }
   } : null);
@@ -925,7 +1065,7 @@ async function showDataManager(id) {
   view.innerHTML = `
     <div class="dm-head">
       <p class="muted">As tabelas do app se ligam pelos <strong>campos com o mesmo nome</strong> (🔑). Adicione quantas quiser: Excel, CSV ou QVD.</p>
-      ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar dados</button>' : ''}
+      ${canEditApp(ds) ? '<button class="btn" id="btn-addtable">+ Adicionar dados</button>' : ''}
     </div>
     ${sm.result ? `<div class="card script-note ${sm.error ? 'bad' : ''}">📝 ${sm.error
       ? `O script de carga está com erro: <strong>${esc(sm.error)}</strong>. <a href="#/script/${encodeURIComponent(ds.id)}">Corrigir no Editor de script</a>`
@@ -939,7 +1079,7 @@ async function showDataManager(id) {
           <div><h3>${esc(t.name)}</h3><small class="muted">${nf.format(t.n)} linhas · ${t.columns.length} campos${fmtSize(m.bytes)}${m.summary ? ' · resumida' : ''}</small></div></div>
         <div class="tags">${t.columns.slice(0, 8).map(c => `<span class="tag ${c.type}">${model.keys.includes(c.name) ? '🔑 ' : ''}${esc(c.name)}</span>`).join('')}${t.columns.length > 8 ? `<span class="tag">+${t.columns.length - 8}</span>` : ''}</div>
         <small class="muted">${linksOf(t).length ? 'Liga por ' + linksOf(t).map(esc).join(', ') : '<span class="warn-text">Sem ligação com outras tabelas</span>'}</small>
-        ${canEdit() ? `<div class="row-actions">
+        ${canEditApp(ds) ? `<div class="row-actions">
           <button class="btn ghost small" data-tupd="${t.id}">⟳ Atualizar</button>
           <button class="btn ghost small" data-tren="${t.id}">✎ Renomear</button>
           <button class="btn ghost small danger" data-tdel="${t.id}">🗑 Remover</button>
@@ -1020,7 +1160,7 @@ async function showScriptEditor(id) {
   const { ds, data } = app;
   document.querySelector('.topbar h1').textContent = ds.name;
   appNav(view, ds, 'script');
-  const edit = canEdit();
+  const edit = canEditApp(ds);
   const srcModel = buildModel(ds, data);
   const sources = srcModel.tables;
   const draftKey = 'nbi-script-draft:' + ds.id;
