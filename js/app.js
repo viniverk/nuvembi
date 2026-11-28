@@ -8,6 +8,7 @@ import { mountDashboard, suggestConfig } from './dashboard.js?v=18';
 import { buildModel } from './model.js?v=18';
 import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=18';
 import { ColTable } from './coltable.js?v=18';
+import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=18';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -121,6 +122,7 @@ function route() {
   if (view === 'equipe') return showTeam();
   if ((view === 'painel' || view === 'app') && id) return showDashboard(id);
   if (view === 'dados' && id) return showDataManager(id);
+  if (view === 'script' && id) return showScriptEditor(id);
   return showHome();
 }
 
@@ -806,6 +808,7 @@ async function handleFile(file) {
 // ---------------- Painel ----------------
 function afterDataChange(id) {
   rowsCache.delete(id);
+  scriptCache.delete(id);
   const h = location.hash;
   if (/^#\/(painel|app|dados|script)\//.test(h)) route(); else location.hash = `#/dados/${encodeURIComponent(id)}`;
 }
@@ -819,6 +822,33 @@ async function loadApp(id) {
   return { ds, data };
 }
 
+// ---------- script de carga: fontes (tabelas do Gerenciador) -> tabelas do modelo ----------
+const scriptCache = new Map();   // id -> { data, script, out }
+const sourcesOf = (ds, data) => Object.fromEntries(buildModel(ds, data).tables.map(t => [t.name, t.t]));
+const scriptTableId = name => 'sc_' + name.replace(/[^A-Za-z0-9]/g, ch => '_' + ch.charCodeAt(0).toString(36));
+// devolve o que o app analisa: as fontes (sem script) ou as tabelas geradas pelo script
+function appModel(ds, data) {
+  if (!ds.script || !ds.script.trim()) return { ds, data, result: null };
+  const hit = scriptCache.get(ds.id);
+  if (hit && hit.data === data && hit.script === ds.script) return hit.out;
+  const result = runScript(ds.script, sourcesOf(ds, data));
+  let out;
+  if (!result.ok) out = { ds, data, result, error: result.error };
+  else out = {
+    result,
+    ds: { ...ds, columns: [], mainName: undefined, tables: result.tables.map(o => ({ id: scriptTableId(o.name), name: o.name, columns: o.t.columns, rowCount: o.t.n })) },
+    data: Object.fromEntries(result.tables.map(o => [scriptTableId(o.name), o.t])),
+  };
+  scriptCache.set(ds.id, { data, script: ds.script, out });
+  return out;
+}
+const scriptErrorCard = (ds, m) => `
+  <div class="card error-card">
+    <h2>⚠ O script de carga deste app tem um erro</h2>
+    <p class="error">${esc(m.error)}${m.result?.line ? ` (linha ${m.result.line})` : ''}</p>
+    ${canEdit() ? `<a class="btn" href="#/script/${encodeURIComponent(ds.id)}">Abrir o Editor de script</a>` : '<p class="muted">Peça para quem edita o app corrigir o script.</p>'}
+  </div>`;
+
 // navegação do app, como no Qlik: Analisar (pastas) · Preparar (gerenciador de dados, editor de script)
 function appNav(view, ds, active) {
   const id = encodeURIComponent(ds.id);
@@ -827,6 +857,7 @@ function appNav(view, ds, active) {
     <nav class="app-nav">
       ${link('analisar', `#/painel/${id}`, '📊 Analisar')}
       ${link('dados', `#/dados/${id}`, '🗄 Gerenciador de dados')}
+      ${link('script', `#/script/${id}`, '📝 Editor de script')}
     </nav>`);
 }
 
@@ -841,7 +872,9 @@ async function showDashboard(id) {
   document.querySelector('.topbar h1').textContent = ds.name;
   appNav(view, ds, 'analisar');
   document.getElementById('btn-share')?.addEventListener('click', () => openShare(ds));
-  if (buildModel(ds, data).empty) {
+  const m = appModel(ds, data);
+  if (m.error) { view.innerHTML = scriptErrorCard(ds, m); return; }
+  if (buildModel(m.ds, m.data).empty) {
     view.innerHTML = `
       <div class="empty card">
         <div class="empty-icon">🗄</div>
@@ -851,8 +884,8 @@ async function showDashboard(id) {
       </div>`;
     return;
   }
-  mountDashboard(view, ds, data, ds.dashboard, canEdit() ? async cfg => {
-    try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; toast('App salvo.'); }
+  mountDashboard(view, m.ds, m.data, ds.dashboard, canEdit() ? async cfg => {
+    try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; m.ds.dashboard = cfg; toast('App salvo.'); }
     catch (e) { console.error(e); toast('Erro ao salvar o app.', 'err'); throw e; }
   } : null);
 }
@@ -869,6 +902,8 @@ async function showDataManager(id) {
   document.querySelector('.topbar h1').textContent = ds.name;
   appNav(view, ds, 'dados');
   const model = buildModel(ds, data);
+  const sm = appModel(ds, data);
+  const finalModel = sm.result && !sm.error ? buildModel(sm.ds, sm.data) : model;
   const linksOf = t => model.keys.filter(k => t.columns.some(c => c.name === k));
   const fmtSize = b => !b ? '' : b > 1e6 ? ` · ${(b / 1e6).toFixed(1).replace('.', ',')} MB` : ` · ${Math.max(1, Math.round(b / 1e3))} KB`;
   const metaOf = t => t.id === 'main' ? ds : (ds.tables || []).find(x => x.id === t.id) || {};
@@ -878,6 +913,9 @@ async function showDataManager(id) {
       <p class="muted">As tabelas do app se ligam pelos <strong>campos com o mesmo nome</strong> (🔑), como no Qlik. Adicione quantas quiser: Excel, CSV ou QVD.</p>
       ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar dados</button>' : ''}
     </div>
+    ${sm.result ? `<div class="card script-note ${sm.error ? 'bad' : ''}">📝 ${sm.error
+      ? `O script de carga está com erro: <strong>${esc(sm.error)}</strong>. <a href="#/script/${encodeURIComponent(ds.id)}">Corrigir no Editor de script</a>`
+      : `Este app usa o <a href="#/script/${encodeURIComponent(ds.id)}">Editor de script</a>: as tabelas abaixo são as <strong>fontes</strong>, e o modelo usado no Analisar é o resultado do script (${sm.result.tables.length} tabela(s)).`}</div>` : ''}
     ${model.empty ? `<div class="empty card"><div class="empty-icon">🗄</div><h2>Nenhuma tabela ainda</h2><p>Clique em <strong>+ Adicionar dados</strong> e escolha uma planilha ou QVD.</p></div>` : `
     <div class="dm-grid">${model.tables.map(t => {
       const m = metaOf(t);
@@ -895,8 +933,8 @@ async function showDataManager(id) {
       </article>`;
     }).join('')}</div>
     <div class="card">
-      <h3>Visualizador do modelo</h3>
-      <div class="model-wrap">${modelSvg(model)}</div>
+      <h3>Visualizador do modelo${sm.result && !sm.error ? ' <small class="muted">(resultado do script)</small>' : ''}</h3>
+      <div class="model-wrap">${finalModel.empty ? '<p class="muted">O script não gerou tabelas.</p>' : modelSvg(finalModel)}</div>
     </div>`}`;
 
   view.querySelector('#btn-addtable')?.addEventListener('click', () => openAddTable(ds, data));
@@ -919,6 +957,202 @@ async function showDataManager(id) {
       toast('Tabela removida.'); afterDataChange(ds.id);
     } catch (err) { console.error(err); toast('Não foi possível remover a tabela.', 'err'); }
   }));
+}
+
+// ---------------- Editor de script ----------------
+const SCRIPT_HELP = `
+  <div class="se-help-grid">
+    <div><h4>Carregar uma tabela</h4><pre>Vendas:
+LOAD Nota, Cliente,
+     Valor AS Faturamento,
+     Year(Data) AS Ano
+FROM [vendas]
+WHERE Valor > 0;</pre></div>
+    <div><h4>Mapa (de-para)</h4><pre>MapaUF:
+MAPPING LOAD Cliente, UF
+FROM [clientes];
+
+LOAD *, ApplyMap('MapaUF',
+  Cliente, 'Sem UF') AS UF
+FROM [vendas];</pre></div>
+    <div><h4>Juntar e agrupar</h4><pre>LEFT JOIN (Vendas)
+LOAD Cliente, Nome FROM [clientes];
+
+Resumo:
+LOAD Cliente, Sum(Valor) AS Total
+RESIDENT Vendas
+GROUP BY Cliente;</pre></div>
+    <div><h4>Outros comandos</h4><pre>CONCATENATE (Vendas) LOAD …;
+NOCONCATENATE LOAD …;
+LOAD DISTINCT …;
+LOAD * INLINE [ Ano, Meta
+2026, 1000 ];
+DROP TABLE Tmp;
+DROP FIELD Campo FROM Vendas;
+RENAME FIELD A TO B;
+SET vAno = 2026;  … $(vAno)
+WHERE NOT Exists(Nota)
+// comentário  /* bloco */</pre></div>
+  </div>
+  <p class="muted small">Datas do Protheus (texto 20260315): <code>Date#(D2_EMISSAO, 'YYYYMMDD') AS Emissao</code>. Campos com espaço ou acento vão entre colchetes: <code>[Valor Total]</code>. Textos entre aspas simples: <code>'SC'</code>.</p>`;
+
+async function showScriptEditor(id) {
+  const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
+    `<a class="btn ghost" href="#/">← Meus apps</a>`);
+  let app;
+  try { app = await loadApp(id); }
+  catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }
+  if (!app) { view.innerHTML = `<div class="card error">App não encontrado.</div>`; return; }
+  const { ds, data } = app;
+  document.querySelector('.topbar h1').textContent = ds.name;
+  appNav(view, ds, 'script');
+  const edit = canEdit();
+  const srcModel = buildModel(ds, data);
+  const sources = srcModel.tables;
+  const draftKey = 'nbi-script-draft:' + ds.id;
+  let draft = null;
+  try { draft = localStorage.getItem(draftKey); } catch {}
+  const saved = ds.script || '';
+  const initial = draft !== null && draft !== saved ? draft : saved;
+  const qn = s => /^[A-Za-z_][A-Za-z0-9_]*$/.test(s) ? s : `[${s}]`;
+
+  view.innerHTML = `
+    <div class="se">
+      <aside class="se-side card">
+        <h4>Fontes do app</h4>
+        ${sources.length ? sources.map((t, k) => `
+          <details class="se-src" ${k === 0 ? 'open' : ''}>
+            <summary><strong>${esc(t.name)}</strong> <small class="muted">${nf.format(t.n)} linhas</small></summary>
+            ${edit ? `<button class="btn ghost small" data-insload="${k}">+ Inserir LOAD</button>` : ''}
+            <div class="se-fields">${t.columns.map(c => `<button type="button" class="se-field ${c.type}" data-insfield="${esc(qn(c.name))}" title="${c.type}">${esc(c.name)}</button>`).join('')}</div>
+          </details>`).join('') : `<p class="muted small">Nenhuma fonte ainda. Adicione tabelas no <a href="#/dados/${encodeURIComponent(ds.id)}">Gerenciador de dados</a>.</p>`}
+        <h4>Funções</h4>
+        <div class="se-fields">${FUNCTION_NAMES.map(f => `<button type="button" class="se-fn" data-insfn="${f}">${f}</button>`).join('')}</div>
+      </aside>
+      <section class="se-main">
+        <div class="se-bar">
+          ${edit ? '<button class="btn" id="se-run" title="Ctrl+Enter">▶ Carregar dados</button>' : ''}
+          ${edit ? `<button class="btn ghost" id="se-gen">✨ Gerar script das fontes</button>` : ''}
+          <button class="btn ghost" id="se-helpbtn">? Ajuda</button>
+          ${edit && saved ? '<button class="btn ghost danger" id="se-off">Desativar script</button>' : ''}
+          <span class="muted small" id="se-status">${draft !== null && draft !== saved ? '✎ Rascunho não carregado (restaurado deste navegador)' : saved ? '✓ Script carregado' : 'Sem script: o app usa as fontes como estão'}</span>
+        </div>
+        <div class="se-help card" id="se-help" hidden>${SCRIPT_HELP}</div>
+        <div class="se-editor">
+          <pre class="se-gutter" id="se-gutter" aria-hidden="true"></pre>
+          <textarea id="se-text" spellcheck="false" autocomplete="off" autocapitalize="off" ${edit ? '' : 'readonly'} placeholder="${edit ? 'Escreva o script de carga aqui ou clique em ✨ Gerar script das fontes.' : 'Este app não tem script.'}">${esc(initial)}</textarea>
+        </div>
+        <div class="se-log card" id="se-log"><p class="muted small">O resultado da carga aparece aqui: tabelas, linhas, campos e erros com o número da linha.</p></div>
+      </section>
+    </div>`;
+
+  const ta = view.querySelector('#se-text'), gutter = view.querySelector('#se-gutter'), status = view.querySelector('#se-status'), logEl = view.querySelector('#se-log');
+  let errLine = 0;
+  const paintGutter = () => {
+    const n = ta.value.split('\n').length;
+    let out = '';
+    for (let i = 1; i <= n; i++) out += (i === errLine ? `<b>${i}</b>` : i) + '\n';
+    gutter.innerHTML = out;
+    gutter.scrollTop = ta.scrollTop;
+  };
+  paintGutter();
+  ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+  ta.addEventListener('input', () => {
+    errLine = 0; paintGutter();
+    try { localStorage.setItem(draftKey, ta.value); } catch {}
+    status.textContent = ta.value === (ds.script || '') ? '✓ Script carregado' : '✎ Alterações não carregadas';
+  });
+  const insert = text => {
+    if (!edit) return;
+    const a = ta.selectionStart, b = ta.selectionEnd;
+    ta.setRangeText(text, a, b, 'end');
+    ta.focus(); ta.dispatchEvent(new Event('input'));
+  };
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) { e.preventDefault(); insert('    '); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
+  });
+  view.querySelectorAll('[data-insfield]').forEach(b => b.addEventListener('click', () => insert(b.dataset.insfield)));
+  view.querySelectorAll('[data-insfn]').forEach(b => b.addEventListener('click', () => insert(b.dataset.insfn + '(')));
+  view.querySelectorAll('[data-insload]').forEach(b => b.addEventListener('click', () => {
+    const t = sources[+b.dataset.insload];
+    const pre = ta.value && !ta.value.endsWith('\n\n') ? (ta.value.endsWith('\n') ? '\n' : '\n\n') : '';
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    insert(pre + defaultScript([{ name: t.name, columns: t.columns }]).split('\n').filter(l => !l.startsWith('//')).join('\n').replace(/^\n+/, ''));
+  }));
+  view.querySelector('#se-helpbtn').addEventListener('click', () => { const h = view.querySelector('#se-help'); h.hidden = !h.hidden; });
+  view.querySelector('#se-gen')?.addEventListener('click', () => {
+    if (!sources.length) { toast('Adicione tabelas no Gerenciador de dados primeiro.', 'err'); return; }
+    if (ta.value.trim() && !confirm('Substituir o script atual por um script novo, gerado a partir das fontes?')) return;
+    ta.value = defaultScript(sources.map(t => ({ name: t.name, columns: t.columns })));
+    ta.dispatchEvent(new Event('input'));
+  });
+  view.querySelector('#se-off')?.addEventListener('click', async () => {
+    if (!confirm('Desativar o script? O app volta a usar as fontes do Gerenciador como estão. O texto do script fica guardado como rascunho neste navegador.')) return;
+    try {
+      try { localStorage.setItem(draftKey, ta.value); } catch {}
+      await store.saveScript(ds.id, ''); ds.script = ''; scriptCache.delete(ds.id);
+      toast('Script desativado.'); showScriptEditor(ds.id);
+    } catch (e) { console.error(e); toast('Não foi possível salvar.', 'err'); }
+  });
+
+  const icon = { table: '▦', map: '⇄', trace: '›', info: 'ℹ', warn: '⚠', error: '✖', done: '✓' };
+  const showLog = (res, extra = '') => {
+    logEl.innerHTML = `
+      <ul class="se-lines">${res.log.map(l => `<li class="se-${l.kind}">${icon[l.kind] || '·'} ${l.kind === 'error' && l.line ? `<a href="#" data-goline="${l.line}">` : ''}${esc(l.text)}${l.kind === 'error' && l.line ? '</a>' : ''}</li>`).join('')}</ul>
+      ${res.ok && res.tables.length ? `<div class="se-out">${res.tables.map(o => `<div class="se-outt"><strong>${esc(o.name)}</strong> <small class="muted">${nf.format(o.t.n)} linhas</small><div class="tags">${o.t.columns.slice(0, 12).map(c => `<span class="tag ${c.type}">${res.tables.some(x => x !== o && x.t.has(c.name)) ? '🔑 ' : ''}${esc(c.name)}</span>`).join('')}${o.t.columns.length > 12 ? `<span class="tag">+${o.t.columns.length - 12}</span>` : ''}</div></div>`).join('')}</div>` : ''}
+      ${extra}`;
+    logEl.querySelectorAll('[data-goline]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); goLine(+a.dataset.goline); }));
+  };
+  const goLine = line => {
+    const lines = ta.value.split('\n');
+    const start = lines.slice(0, line - 1).reduce((s, l) => s + l.length + 1, 0);
+    ta.focus();
+    ta.setSelectionRange(start, start + (lines[line - 1] || '').length);
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    ta.scrollTop = Math.max(0, (line - 4) * lh);
+    errLine = line; paintGutter();
+  };
+
+  async function run() {
+    if (!edit) return;
+    const btn = view.querySelector('#se-run');
+    const text = ta.value;
+    btn.disabled = true; btn.textContent = '⏳ Carregando…';
+    logEl.innerHTML = '<p class="muted">Executando o script…</p>';
+    await new Promise(r => setTimeout(r, 30));
+    try {
+      if (!text.trim()) {
+        await store.saveScript(ds.id, ''); ds.script = ''; scriptCache.delete(ds.id);
+        try { localStorage.removeItem(draftKey); } catch {}
+        logEl.innerHTML = '<p class="muted">Script vazio: o app usa as fontes do Gerenciador como estão.</p>';
+        status.textContent = 'Sem script: o app usa as fontes como estão';
+        return;
+      }
+      const res = runScript(text, sourcesOf(ds, data));
+      if (!res.ok) {
+        showLog(res, '<p class="error small">Nada foi alterado no app. Corrija o erro e carregue de novo.</p>');
+        if (res.line) goLine(res.line);
+        status.textContent = '✖ Erro na carga';
+        return;
+      }
+      if (!res.tables.length) { showLog(res, '<p class="error small">O script não gerou nenhuma tabela; nada foi alterado.</p>'); return; }
+      await store.saveScript(ds.id, text);
+      ds.script = text;
+      scriptCache.delete(ds.id);
+      try { localStorage.removeItem(draftKey); } catch {}
+      status.textContent = '✓ Script carregado';
+      showLog(res, `<div class="row-actions"><a class="btn" href="#/painel/${encodeURIComponent(ds.id)}">📊 Ir para Analisar</a><a class="btn ghost" href="#/dados/${encodeURIComponent(ds.id)}">Ver o modelo</a></div>`);
+      toast('Dados carregados.');
+    } catch (e) {
+      console.error(e); toast('Não foi possível salvar o script.', 'err');
+    } finally {
+      btn.disabled = false; btn.textContent = '▶ Carregar dados';
+    }
+  }
+  view.querySelector('#se-run')?.addEventListener('click', run);
+  // mostra o resultado do script já carregado
+  if (saved && initial === saved) { const m = appModel(ds, data); if (m.result) { showLog(m.result); if (m.error && m.result.line) { errLine = m.result.line; paintGutter(); } } }
 }
 
 // ---------------- Compartilhar por link ----------------
@@ -991,7 +1225,9 @@ async function showPublic(t) {
       </header>
       <main class="main" id="view"></main>
     </div>`;
-  mountDashboard(document.getElementById('view'), data.ds, data.data, data.ds.dashboard, null);
+  const pm = appModel(data.ds, data.data);
+  if (pm.error) { document.getElementById('view').innerHTML = '<div class="card error">Este app está com um erro no script de carga. Avise quem compartilhou.</div>'; return; }
+  mountDashboard(document.getElementById('view'), pm.ds, pm.data, data.ds.dashboard, null);
 }
 
 // ---------------- Equipe ----------------

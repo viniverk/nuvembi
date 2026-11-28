@@ -82,3 +82,17 @@ e *envia* os dados para a nuvem — o mesmo modelo do Qlik Data Gateway e do Pow
 ## Atualizações e cache do navegador
 Os arquivos são carregados com um número de versão (`?v=5` no `index.html` e nos `import` do `js/app.js`).
 Ao publicar uma mudança, aumente esse número nos dois lugares para que todos recebam a versão nova na hora.
+
+## Editor de script
+
+Cada app tem um **Editor de script** parecido com o script de carga do Qlik. As tabelas do *Gerenciador de dados* são as **fontes**; o script monta as tabelas do modelo:
+
+```
+Vendas:
+LOAD D2_DOC AS Nota, D2_CLIENTE AS Cliente,
+     Date#(D2_EMISSAO, 'YYYYMMDD') AS Emissao, D2_TOTAL AS Valor
+FROM [SD2]
+WHERE D2_FILIAL = '0101';
+```
+
+Suporta `LOAD [DISTINCT] … FROM / RESIDENT / INLINE`, `WHERE`, `GROUP BY` (Sum, Count, Count(DISTINCT), Avg, Min, Max, Only, Concat), `MAPPING LOAD` + `ApplyMap`, `LEFT/RIGHT/INNER/OUTER JOIN`, `CONCATENATE`/`NOCONCATENATE` (e concatenação automática), `DROP TABLE/FIELD`, `RENAME FIELD/TABLE`, `SET/LET` + `$(var)`, `Exists`, `TRACE`, `EXIT SCRIPT` e as funções de texto, data e número mais usadas. Roda no navegador (1,2 milhão de linhas em menos de 1 s nos testes). Sem script, o app usa as fontes como estão.

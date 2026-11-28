@@ -258,6 +258,7 @@ async function createFirebaseStore(config) {
       return tables;
     },
     async updateDashboard(id, dashboard) { await F.updateDoc(dsDoc(id), { dashboard }); },
+    async saveScript(id, script) { await F.updateDoc(dsDoc(id), { script, updatedAt: now(), updatedBy: me.email }); },
     async deleteDataset(id) {
       const ds = await F.getDoc(dsDoc(id));
       const shareId = ds.exists() ? ds.data().shareId : null;
@@ -505,6 +506,12 @@ function createLocalStore() {
       Object.assign(list.find(x => x.id === id), metaPatch, { rowCount: table.n, format: 'col1', updatedAt: now(), updatedBy: me.email });
       await set('datasets:' + org.id, list);
       onProgress && onProgress(1);
+    },
+    async saveScript(id, script) {
+      await needEdit();
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === id);
+      if (ds) { ds.script = script; ds.updatedAt = now(); await set('datasets:' + org.id, list); }
     },
     async updateDashboard(id, dashboard) {
       await needEdit();
