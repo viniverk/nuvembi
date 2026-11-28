@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=27';
-import { createStore, ROLES } from './store.js?v=27';
-import { readFile, normalizeRows } from './parser.js?v=27';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=27';
-import { buildModel } from './model.js?v=27';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=27';
-import { ColTable } from './coltable.js?v=27';
-import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=27';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=29';
+import { createStore, ROLES } from './store.js?v=29';
+import { readFile, normalizeRows } from './parser.js?v=29';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=29';
+import { buildModel } from './model.js?v=29';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=29';
+import { ColTable } from './coltable.js?v=29';
+import { runScript, defaultScript, FUNCTION_NAMES, FUNCTION_HELP, highlightScript } from './script.js?v=29';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

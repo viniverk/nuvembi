@@ -6,10 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { isCodeName, toNumber } from './parser.js?v=27';
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=27';
-import { buildModel } from './model.js?v=27';
-import { ColTable } from './coltable.js?v=27';
+import { isCodeName, toNumber } from './parser.js?v=29';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=29';
+import { buildModel } from './model.js?v=29';
+import { ColTable } from './coltable.js?v=29';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem', countd: 'Contagem distinta' };
@@ -27,7 +27,8 @@ export const TYPES = {
   doughnut: { label: 'Rosca', icon: '◎', h: 320 },
   table: { label: 'Tabela resumo', icon: '▤', h: 320 },
   pivot: { label: 'Tabela dinâmica', icon: '⊞', h: 400 },
-  datatable: { label: 'Tabela de dados', icon: '▦', h: 420 }
+  datatable: { label: 'Tabela de dados', icon: '▦', h: 420 },
+  filterpane: { label: 'Painel de filtro', icon: '☷', h: 300 }
 };
 const GAP = 16;          // espaço entre os cartões (px)
 const COLS = 24;         // colunas da grade livre
@@ -313,6 +314,7 @@ function periodWindow(ref, period, compare) {
 
 function autoTitle(w, ds) {
   if (w.type === 'datatable') return 'Dados';
+  if (w.type === 'filterpane') return 'Filtros';
   if (w.type === 'kpi' || w.type === 'gauge') return measureLabel(w);
   if (w.type === 'pivot') return `${measureLabel(w)} por ${[w.dim, w.dim2].filter(Boolean).join(' / ') || '—'}${w.pcol ? ' × ' + w.pcol : ''}`;
   const dimCol = (COLUMNS.length ? COLUMNS : ds.columns).find(c => c.name === w.dim);
@@ -398,6 +400,34 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     if (c === '__month') return MONTHS_FULL.map((_, i) => String(i + 1).padStart(2, '0'));
     return [...model.distinctValues(c)].map(v => String(v ?? '(vazio)')).sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
   }
+  // valores de um campo que ainda são possíveis com as seleções dos OUTROS campos (null = todos)
+  function possibleValues(c) {
+    const others = Object.fromEntries(Object.entries(cfg.filters).filter(([k, v]) => k !== c && v && v.length));
+    if (!Object.keys(others).length) return null;
+    const st = model.select(others, cfg.dateCol);
+    const field = c === '__year' || c === '__month' ? cfg.dateCol : c;
+    const out = new Set();
+    for (const tid of model.tablesOf(field)) {
+      const t = model.byId[tid].t, idx = st[tid], col = t.col(field);
+      if (!idx) continue;
+      if (col.dict && field === c) {
+        const seen = new Uint8Array(col.dict.length);
+        for (let j = 0; j < idx.length; j++) seen[col.codes[idx[j]]] = 1;
+        seen.forEach((f, k) => { if (f) out.add(String(col.dict[k] ?? '(vazio)')); });
+      } else {
+        const g = t.getter(field);
+        for (let j = 0; j < idx.length; j++) {
+          const v = g(idx[j]);
+          if (c === '__year') { if (v) out.add(String(v).slice(0, 4)); }
+          else if (c === '__month') { if (v) out.add(String(v).slice(5, 7)); }
+          else out.add(String(v ?? '(vazio)'));
+        }
+      }
+    }
+    return out;
+  }
+  const fpSearch = new Map();   // texto da busca de cada campo do painel de filtro (sobrevive ao redesenho)
+
   function setFilters(next) {
     next = normFilters(next);
     if (JSON.stringify(next) === JSON.stringify(cfg.filters)) return;
@@ -552,6 +582,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     layout();
     const dateless = { filters: Object.fromEntries(Object.entries(cfg.filters).filter(([k]) => k !== '__year' && k !== '__month')) };
     const ctx = { state, stateNoDate: model.select(dateless.filters, cfg.dateCol) };
+    if (fsId) markFs();   // tela cheia continua no mesmo gráfico depois de redesenhar
     cfg.widgets.forEach(w => fillWidget(w, rows, ctx));
     bindEvents();
     bindViewTools();
@@ -608,9 +639,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       const w = allWidgets().find(x => x.id === sec.dataset.id);
       if (!w) return;
       sec.querySelector('[data-wv="full"]')?.addEventListener('click', () => {
-        if (document.fullscreenElement) document.exitFullscreen();
-        else if (sec.requestFullscreen) sec.requestFullscreen().catch(() => sec.classList.toggle('w-max'));
-        else sec.classList.toggle('w-max');
+        if (fsId) { exitFs(); return; }
+        // tela cheia do painel inteiro (que não é recriado), mostrando só este gráfico + a barra de seleções
+        fsId = w.id;
+        el.classList.add('dash-fs');
+        markFs();
+        if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+        setTimeout(() => { charts.get(w.id)?.resize(); refitPanes(); }, 80);
       });
       sec.querySelector('[data-wv="export"]')?.addEventListener('click', e => {
         e.stopPropagation();
@@ -625,7 +660,27 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     });
   }
   // ao entrar/sair da tela cheia, os gráficos se ajustam ao novo tamanho
-  document.addEventListener('fullscreenchange', () => { setTimeout(() => charts.forEach(c => c.resize()), 50); });
+  let fsId = null;
+  function markFs() { el.querySelectorAll('.widget[data-id]').forEach(x => x.classList.toggle('fs-target', x.dataset.id === fsId)); }
+  function exitFs() {
+    fsId = null;
+    el.classList.remove('dash-fs');
+    markFs();
+    if (document.fullscreenElement === el) document.exitFullscreen().catch(() => {});
+    setTimeout(() => { charts.forEach(c => c.resize()); refitPanes(); }, 80);
+  }
+  const onKeyFs = e => { if (e.key === 'Escape' && fsId && !document.fullscreenElement) exitFs(); };
+  document.addEventListener('keydown', onKeyFs);
+  const refitPanes = () => el.querySelectorAll('.widget.w-filterpane').forEach(sec => {
+    const w = allWidgets().find(x => x.id === sec.dataset.id);
+    if (w) fillFilterPane(w, sec.querySelector('.w-body'));
+  });
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && fsId) { exitFs(); return; }
+    setTimeout(() => { charts.forEach(c => c.resize()); refitPanes(); }, 80);
+  });
+  let refitTimer;
+  window.addEventListener('resize', () => { clearTimeout(refitTimer); refitTimer = setTimeout(() => { if (el.isConnected) refitPanes(); }, 200); });
 
   function widgetHtml(w) {
     const title = w.title || autoTitle(w, ds);
@@ -741,6 +796,8 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       body.innerHTML = `<div class="muted center small">Item mestre com problema: ${esc(master.missing ? 'foi excluído' : compiledOf(master).error)}</div>`;
       return;
     }
+
+    if (w.type === 'filterpane') { fillFilterPane(w, body); return; }
 
     if (w.type === 'datatable') {
       const t = model.byId[w.table] || model.primary;
@@ -903,6 +960,53 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     charts.set(w.id, chart);
   }
 
+  // ---------- painel de filtro: listas de valores na pasta (verde = selecionado, branco = possível, cinza = excluído) ----------
+  function fillFilterPane(w, body) {
+    const valid = c => (c === '__year' || c === '__month') ? !!cfg.dateCol : !!cols.find(x => x.name === c);
+    const fields = (Array.isArray(w.fields) ? w.fields : []).filter(valid);
+    if (!fields.length) { body.innerHTML = '<div class="muted center small">Escolha os campos do painel: Editar → ✎ no painel → Campos.</div>'; return; }
+    // sem espaço para as listas abertas: cada campo vira uma linha compacta que abre a lista (como no Qlik)
+    const W = body.clientWidth || 300, H = body.clientHeight || 300;
+    const perRow = Math.max(1, Math.min(fields.length, Math.floor((W + 10) / 170)));
+    const rowsN = Math.ceil(fields.length / perRow);
+    if ((H - (rowsN - 1) * 10) / rowsN < 120) {
+      body.innerHTML = `<div class="fp-compact">${fields.map(c => {
+        const sel = cfg.filters[c] || [];
+        const txt = !sel.length ? 'Todos' : sel.length === 1 ? valueLabel(c, sel[0]) : `${sel.length} de ${nf.format(allValues(c).length)}`;
+        return `<button type="button" class="fp-pill ${sel.length ? 'on' : ''}" data-field="${esc(c)}"><strong>${esc(fieldLabel(c))}</strong><span>${esc(txt)}</span><i>▾</i></button>`;
+      }).join('')}</div>`;
+      body.querySelectorAll('.fp-pill').forEach(b => b.addEventListener('click', () => openListbox(b.dataset.field, b)));
+      return;
+    }
+    body.innerHTML = `<div class="fp">${fields.map((c, n) => {
+      const values = allValues(c);
+      const sel = new Set(cfg.filters[c] || []);
+      const poss = possibleValues(c);
+      const state = v => sel.has(v) ? 'sel' : (poss && !poss.has(v)) ? 'excl' : sel.size ? 'alt' : 'poss';
+      const rank = { sel: 0, poss: 1, alt: 1, excl: 2 };
+      const q = (fpSearch.get(w.id + '|' + c) || '').toLowerCase();
+      const list = values.filter(v => !q || String(valueLabel(c, v)).toLowerCase().includes(q))
+        .map(v => [v, state(v)]).sort((a, b) => rank[a[1]] - rank[b[1]]);
+      return `<div class="fp-field">
+        <div class="fp-head"><strong title="${esc(fieldLabel(c))}">${esc(fieldLabel(c))}</strong>
+          ${sel.size ? `<span class="fp-count">${sel.size}</span><button type="button" class="fp-clear" data-fpclear="${n}" title="Limpar ${esc(fieldLabel(c))}">×</button>` : ''}</div>
+        ${values.length > 6 ? `<input class="fp-search" data-fps="${n}" placeholder="Pesquisar…" value="${esc(fpSearch.get(w.id + '|' + c) || '')}">` : ''}
+        <div class="fp-list">${list.slice(0, 500).map(([v, st]) => `<div class="fp-v ${st}" data-fpv="${n}" data-v="${esc(v)}" title="${esc(valueLabel(c, v))}">${esc(valueLabel(c, v))}</div>`).join('')}
+          ${list.length > 500 ? `<div class="muted small">+${nf.format(list.length - 500)} — use a pesquisa</div>` : ''}${!list.length ? '<div class="muted small">Nada encontrado.</div>' : ''}</div>
+      </div>`;
+    }).join('')}</div>`;
+    body.querySelectorAll('[data-fpv]').forEach(d => d.addEventListener('click', () => toggleFilter(fields[+d.dataset.fpv], d.dataset.v)));
+    body.querySelectorAll('[data-fpclear]').forEach(b => b.addEventListener('click', () => setFilters({ ...cfg.filters, [fields[+b.dataset.fpclear]]: [] })));
+    body.querySelectorAll('[data-fps]').forEach(inp => inp.addEventListener('input', () => {
+      const n = +inp.dataset.fps, key = w.id + '|' + fields[n];
+      fpSearch.set(key, inp.value);
+      const pos = inp.selectionStart;
+      fillFilterPane(w, body);
+      const again = body.querySelector(`[data-fps="${n}"]`);
+      if (again) { again.focus(); again.setSelectionRange(pos, pos); }
+    }));
+  }
+
   // ---------- tabela dinâmica: linhas (com sub-linhas e subtotais) × colunas ----------
   function fillPivot(w, body, mt, rows, ctx) {
     const grain = w.grain || 'month';
@@ -1014,11 +1118,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     const search = box.querySelector('.lb-search');
     const list = box.querySelector('.lb-list');
     const visible = () => { const q = search.value.trim().toLowerCase(); return values.filter(v => !q || valueLabel(c, v).toLowerCase().includes(q)); };
+    const poss = possibleValues(c);
     const paint = () => {
       const sel = new Set(cfg.filters[c] || []);
-      const vis = visible();
+      const rank = v => sel.has(v) ? 0 : poss && !poss.has(v) ? 2 : 1;
+      const vis = visible().sort((a, b) => rank(a) - rank(b));
       list.innerHTML = vis.slice(0, 1000).map(v => `
-        <label class="lb-item ${sel.has(v) ? 'selected' : ''}"><input type="checkbox" value="${esc(v)}" ${sel.has(v) ? 'checked' : ''}><span>${esc(valueLabel(c, v))}</span></label>`).join('')
+        <label class="lb-item ${sel.has(v) ? 'selected' : poss && !poss.has(v) ? 'excl' : ''}"><input type="checkbox" value="${esc(v)}" ${sel.has(v) ? 'checked' : ''}><span>${esc(valueLabel(c, v))}</span></label>`).join('')
         + (vis.length > 1000 ? `<div class="muted small">Mostrando 1.000 de ${nf.format(vis.length)}. Use a pesquisa.</div>` : '')
         + (!vis.length ? '<div class="muted small">Nada encontrado.</div>' : '');
     };
@@ -1232,7 +1338,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           ${textMeasures.length ? `<optgroup label="Contar valores (texto e datas)">${textMeasures.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup>` : ''}</select></label>
         ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || PID))).join('')}</select></label>` : ''}
         <div class="field dt-fields" data-show="fields">
-          <span>Campos da tabela <small class="muted" id="dt-count"></small></span>
+          <span><span id="dt-title">Campos da tabela</span> <small class="muted" id="dt-count"></small></span>
           <div class="dt-tools">
             <input type="search" id="dt-search" placeholder="Buscar campo…">
             <button type="button" class="btn ghost small" id="dt-all">Todos</button>
@@ -1270,14 +1376,14 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
         format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
         table: form.wtable ? form.wtable.value : PID,
-        fields: t === 'datatable' ? dtPicked() : base.fields,
+        fields: t === 'datatable' || t === 'filterpane' ? dtPicked() : base.fields,
         dim2: t === 'pivot' ? (form.dim2.value || null) : base.dim2,
         pcol: t === 'pivot' ? (form.pcol.value || null) : base.pcol,
         target: ['kpi', 'gauge'].includes(t) ? (form.target.value || null) : base.target,
         targetValue: ['kpi', 'gauge'].includes(t) ? form.targetValue.value.trim() : base.targetValue
       };
       if (isNew) {
-        w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
+        w.gw = t === 'kpi' || t === 'filterpane' ? 6 : t === 'datatable' ? COLS : 12;
         w.gh = Math.round((TYPES[t].h + GAP) / ROW);
         Object.assign(w, findFree(w.gw, w.gh));
         cfg.widgets.push(w);
@@ -1300,23 +1406,24 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       if (txt && !['count', 'countd'].includes(form.agg.value)) form.agg.value = 'countd';
       const dimCol = cols.find(c => c.name === form.dim.value);
       const isDateF = n => cols.find(c => c.name === n)?.type === 'date';
+      const noChart = t === 'datatable' || t === 'filterpane';   // sem dimensão/medida
       const show = {
-        dim: !['kpi', 'gauge', 'datatable'].includes(t),
+        dim: !['kpi', 'gauge', 'datatable', 'filterpane'].includes(t),
         dim2: t === 'pivot', pcol: t === 'pivot',
         target: t === 'kpi' || t === 'gauge',
         targetValue: (t === 'kpi' || t === 'gauge') && form.target.value === '__value',
-        grain: !['kpi', 'gauge', 'datatable'].includes(t) && (dimCol?.type === 'date' || (t === 'pivot' && (isDateF(form.dim2.value) || isDateF(form.pcol.value)))),
-        measure: t !== 'datatable',
-        agg: t !== 'datatable' && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
-        format: t !== 'datatable',
+        grain: !['kpi', 'gauge', 'datatable', 'filterpane'].includes(t) && (dimCol?.type === 'date' || (t === 'pivot' && (isDateF(form.dim2.value) || isDateF(form.pcol.value)))),
+        measure: !noChart,
+        agg: !noChart && form.measure.value !== '__count' && !form.measure.value.startsWith('m:'),
+        format: !noChart,
         table: t === 'datatable',
-        fields: t === 'datatable',
+        fields: t === 'datatable' || t === 'filterpane',
         period: t === 'kpi' && !!cfg.dateCol,
         compare: t === 'kpi' && !!cfg.dateCol && form.period.value !== 'all',
-        top: !['kpi', 'gauge', 'datatable', 'pivot'].includes(t),
-        sort: !['kpi', 'gauge', 'datatable'].includes(t),
-        color: !['datatable', 'table', 'pivot', 'gauge'].includes(t),
-        labels: !['kpi', 'gauge', 'datatable', 'table', 'pivot'].includes(t)
+        top: !noChart && !['kpi', 'gauge', 'pivot'].includes(t),
+        sort: !noChart && !['kpi', 'gauge'].includes(t),
+        color: !noChart && !['table', 'pivot', 'gauge'].includes(t),
+        labels: !noChart && !['kpi', 'gauge', 'table', 'pivot'].includes(t)
       };
       form.querySelectorAll('[data-show]').forEach(f => (f.hidden = !show[f.dataset.show]));
       form.querySelector('[data-show="dim"] > span').textContent = t === 'pivot' ? 'Linhas' : 'Analisar por';
@@ -1338,21 +1445,26 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     }));
     // ----- tabela de dados: escolher e ordenar campos -----
     const dtTable = () => model.byId[form.wtable ? form.wtable.value : PID] || model.primary;
+    // painel de filtro: qualquer campo do app (+ Ano/Mês da data principal)
+    const fpCols = [...(cfg.dateCol ? [{ name: '__year', type: 'text' }, { name: '__month', type: 'text' }] : []), ...cols];
+    const isFP = () => form.type.value === 'filterpane';
+    const dtSource = () => isFP() ? { columns: fpCols } : dtTable();
     let dtOrder = [], dtSel = new Set();
-    const dtReset = (t, fields) => {
+    const dtReset = (t, fields, emptyDefault) => {
       const names = t.columns.map(c => c.name);
       const keep = Array.isArray(fields) ? fields.filter(n => names.includes(n)) : [];
       dtOrder = keep.length ? [...keep, ...names.filter(n => !keep.includes(n))] : names;
-      dtSel = new Set(keep.length ? keep : names);
+      dtSel = new Set(keep.length ? keep : emptyDefault || names);
     };
     const dtList = form.querySelector('#dt-list'), dtSearch = form.querySelector('#dt-search');
     const dtRender = () => {
-      const t = dtTable();
+      const t = dtSource();
+      form.querySelector('#dt-title').textContent = isFP() ? 'Campos do filtro' : 'Campos da tabela';
       const q = dtSearch.value.trim().toLowerCase();
       dtList.innerHTML = dtOrder.map((n, k) => {
         const c = t.columns.find(x => x.name === n);
         return `<li ${q && !n.toLowerCase().includes(q) ? 'hidden' : ''} class="${dtSel.has(n) ? 'on' : ''}">
-          <label><input type="checkbox" data-dtf="${esc(n)}" ${dtSel.has(n) ? 'checked' : ''}> ${esc(n)} <i class="tag ${c?.type}">${c?.type === 'number' ? 'número' : c?.type === 'date' ? 'data' : 'texto'}</i></label>
+          <label><input type="checkbox" data-dtf="${esc(n)}" ${dtSel.has(n) ? 'checked' : ''}> ${esc(fieldLabel(n))} <i class="tag ${c?.type}">${c?.type === 'number' ? 'número' : c?.type === 'date' ? 'data' : 'texto'}</i></label>
           <span class="dt-move"><button type="button" data-dtup="${k}" ${k ? '' : 'disabled'} title="Subir">↑</button><button type="button" data-dtdown="${k}" ${k < dtOrder.length - 1 ? '' : 'disabled'} title="Descer">↓</button></span>
         </li>`;
       }).join('');
@@ -1360,14 +1472,22 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     };
     // ordem final = ordem da lista, só os marcados; todos marcados na ordem original = sem escolha
     const dtPicked = () => {
+      if (isFP()) return dtOrder.filter(n => dtSel.has(n));
       const t = dtTable();
       const out = dtOrder.filter(n => dtSel.has(n));
       if (!out.length) return null;
       const all = t.columns.map(c => c.name);
       return out.length === all.length && out.every((n, k) => n === all[k]) ? null : out;
     };
-    dtReset(dtTable(), base.table === (form.wtable ? form.wtable.value : PID) || !form.wtable ? base.fields : null);
+    // campos sugeridos para um painel de filtro novo: os filtros do app ou os 3 primeiros campos de texto
+    const fpDefault = () => (cfg.filterCols?.length ? cfg.filterCols : textCols.slice(0, 3).map(c => c.name)).filter(n => fpCols.some(c => c.name === n));
+    const dtInit = () => {
+      if (isFP()) dtReset(dtSource(), base.type === 'filterpane' ? base.fields : null, fpDefault());
+      else dtReset(dtTable(), base.type === 'datatable' && (base.table === (form.wtable ? form.wtable.value : PID) || !form.wtable) ? base.fields : null);
+    };
+    dtInit();
     dtRender();
+    form.querySelectorAll('input[name=type]').forEach(r => r.addEventListener('change', () => { dtInit(); dtRender(); }));
     form.wtable?.addEventListener('change', () => { dtReset(dtTable(), null); dtRender(); });
     dtSearch.addEventListener('input', dtRender);
     dtSearch.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
