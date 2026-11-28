@@ -1,14 +1,14 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=18';
-import { createStore, ROLES } from './store.js?v=18';
-import { readFile, normalizeRows } from './parser.js?v=18';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=18';
-import { buildModel } from './model.js?v=18';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=18';
-import { ColTable } from './coltable.js?v=18';
-import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=18';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=19';
+import { createStore, ROLES } from './store.js?v=19';
+import { readFile, normalizeRows } from './parser.js?v=19';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=19';
+import { buildModel } from './model.js?v=19';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=19';
+import { ColTable } from './coltable.js?v=19';
+import { runScript, defaultScript, FUNCTION_NAMES } from './script.js?v=19';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -195,11 +195,14 @@ function showLogin() {
 
 // ---------------- Layout ----------------
 function shell(active, title, content, actions = '') {
-  const item = (hash, label, key) => `<a href="#/${hash}" class="${active === key ? 'active' : ''}">${label}</a>`;
+  const item = (hash, label, key) => { const [ic, ...rest] = label.split(' '); return `<a href="#/${hash}" class="${active === key ? 'active' : ''}" title="${esc(rest.join(' '))}"><b>${ic}</b><span>${rest.join(' ')}</span></a>`; };
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('nbi-side') === '1'; } catch {}
   $app.innerHTML = `
-  <div class="layout">
+  <div class="layout ${collapsed ? 'side-min' : ''}">
     <aside class="sidebar">
-      <div class="brand"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
+      <div class="brand"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> <span>${APP_NAME}</span>
+        <button class="side-toggle" id="side-toggle" title="Recolher / expandir o menu">«</button></div>
       <div class="org-box">
         <small>Empresa</small>
         ${workspace.orgs.length > 1
@@ -225,6 +228,12 @@ function shell(active, title, content, actions = '') {
     </main>
   </div>`;
   document.getElementById('btn-logout').addEventListener('click', () => store.signOut());
+  document.getElementById('side-toggle').addEventListener('click', () => {
+    const l = $app.querySelector('.layout');
+    l.classList.toggle('side-min');
+    try { localStorage.setItem('nbi-side', l.classList.contains('side-min') ? '1' : '0'); } catch {}
+    window.dispatchEvent(new Event('resize'));   // gráficos se ajustam à nova largura
+  });
   document.getElementById('org-switch')?.addEventListener('change', async e => {
     rowsCache.clear();
     if (await bootWorkspace(e.target.value)) { location.hash = '#/'; route(); }
@@ -853,7 +862,9 @@ const scriptErrorCard = (ds, m) => `
 function appNav(view, ds, active) {
   const id = encodeURIComponent(ds.id);
   const link = (key, href, label) => `<a href="${href}" class="${active === key ? 'active' : ''}">${label}</a>`;
-  view.insertAdjacentHTML('beforebegin', `
+  const top = document.querySelector('.topbar');
+  top.classList.add('app-top');
+  top.querySelector('h1').insertAdjacentHTML('afterend', `
     <nav class="app-nav">
       ${link('analisar', `#/painel/${id}`, '📊 Analisar')}
       ${link('dados', `#/dados/${id}`, '🗄 Gerenciador de dados')}
@@ -863,7 +874,7 @@ function appNav(view, ds, active) {
 
 async function showDashboard(id) {
   const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost" href="#/">← Meus apps</a>${canEdit() ? '<button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
+    `<a class="btn ghost small" href="#/" title="Voltar para Meus apps">← Apps</a>${canEdit() ? '<button class="btn ghost small" id="btn-share">🔗 Compartilhar</button>' : ''}`);
   let app;
   try { app = await loadApp(id); }
   catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }
@@ -893,7 +904,7 @@ async function showDashboard(id) {
 // ---------------- Gerenciador de dados (tabelas do app + modelo) ----------------
 async function showDataManager(id) {
   const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost" href="#/">← Meus apps</a>`);
+    `<a class="btn ghost small" href="#/" title="Voltar para Meus apps">← Apps</a>`);
   let app;
   try { app = await loadApp(id); }
   catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }
@@ -998,7 +1009,7 @@ WHERE NOT Exists(Nota)
 
 async function showScriptEditor(id) {
   const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost" href="#/">← Meus apps</a>`);
+    `<a class="btn ghost small" href="#/" title="Voltar para Meus apps">← Apps</a>`);
   let app;
   try { app = await loadApp(id); }
   catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }

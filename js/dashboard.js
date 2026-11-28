@@ -6,9 +6,10 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=18';
-import { buildModel } from './model.js?v=18';
-import { ColTable } from './coltable.js?v=18';
+import { isCodeName } from './parser.js?v=19';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=19';
+import { buildModel } from './model.js?v=19';
+import { ColTable } from './coltable.js?v=19';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
@@ -99,9 +100,11 @@ export function suggestConfig(ds, rows, pref = {}) {
   const good = text.filter(c => !isCode(c) && card(c) > 1 && card(c) <= 60);
   const dim = pref.dim || (good.find(c => /categ|grupo|famil|segment|regiao|estado|uf|vendedor|canal|tipo/i.test(c.name))
     || good[0] || text[0] || dates[0])?.name || null;
-  const measure = pref.measure || (nums.find(c => /valor|total|venda|receita|fatur/i.test(c.name))
-    || nums.find(c => /saldo|custo|preco|preço/i.test(c.name))
-    || nums.find(c => /qtd|quant/i.test(c.name) && !c.name.startsWith('Qtd_Registros')) || nums[0])?.name || '__count';
+  // códigos (nota, documento, pedido…) nunca viram medida, mesmo se vierem como número
+  const meas = nums.filter(c => !isCodeName(c.name));
+  const measure = pref.measure || (meas.find(c => /valor|total|venda|receita|fatur/i.test(c.name))
+    || meas.find(c => /saldo|custo|preco|preço/i.test(c.name))
+    || meas.find(c => /qtd|quant/i.test(c.name) && !c.name.startsWith('Qtd_Registros')) || meas[0])?.name || '__count';
   const agg = pref.agg || (measure === '__count' ? 'count' : 'sum');
   const dateCol = dates[0]?.name || null;
   const filterCols = pref.filterCols || [
@@ -470,10 +473,9 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         <button class="btn ghost" data-act="cancel">Cancelar</button>
         <button class="btn" data-act="save">Salvar</button>
       </div>` : `
-      <div class="dash-toolbar">
-        <div class="spacer"></div>
-        <button class="btn ghost" data-act="export">Exportar CSV</button>
-        ${onSave ? '<button class="btn" data-act="edit">✎ Editar</button>' : ''}
+      <div class="view-actions">
+        <button class="btn ghost small" data-act="export" title="Exportar as linhas selecionadas em CSV">⤓ CSV</button>
+        ${onSave ? '<button class="btn small" data-act="edit">✎ Editar</button>' : ''}
       </div>`;
 
     // ----- abas das pastas -----
@@ -491,6 +493,13 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         </div>` : ''}
       </div>` : '';
 
+    // fora da edição, os filtros viram pílulas dentro da barra de seleções (uma linha só)
+    const filterPills = cfg.filterCols.map(c => {
+      if ((c === '__year' || c === '__month') && !cfg.dateCol) return '';
+      if (!c.startsWith('__') && !cols.find(x => x.name === c)) return '';
+      if (cfg.filters[c]?.length) return '';   // já aparece como seleção
+      return `<button type="button" class="filter-pill" data-field="${esc(c)}">${esc(fieldLabel(c))} <i>▾</i></button>`;
+    }).join('');
     // ----- barra de seleções atuais -----
     const selEntries = Object.entries(cfg.filters);
     const selChips = selEntries.map(([c, vals]) => {
@@ -509,8 +518,9 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           <button data-sel="fwd" title="Avançar" ${future.length ? '' : 'disabled'}>↷</button>
           <button data-sel="clear" title="Limpar todas as seleções" ${selEntries.length ? '' : 'disabled'}>⌫</button>
         </div>
-        <div class="sel-items">${selChips || '<span class="sel-empty">Nenhuma seleção — clique nos gráficos ou use os filtros</span>'}</div>
+        <div class="sel-items">${selChips || '<span class="sel-empty">Nenhuma seleção</span>'}${!editing ? filterPills : ''}</div>
         <span class="rowcount" title="${model.multi ? esc(model.tables.map(t => `${t.name}: ${nf.format(state[t.id].length)} de ${nf.format(t.n)}`).join(' · ')) : ''}">${nf.format(rows.length)} de ${nf.format(mainT.n)} linhas${model.multi ? ` · ${model.tables.length} tabelas` : ''}</span>
+        ${!editing ? toolbar : ''}
       </div>`;
 
     // ----- filtros (lista com seleção múltipla) -----
@@ -522,12 +532,12 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       return `<div class="field"><span>${esc(fieldLabel(c))}</span>
         <button type="button" class="filter-dd ${vals.length ? 'active' : ''}" data-field="${esc(c)}"><span>${esc(summary)}</span><i>▾</i></button></div>`;
     }).join('');
-    const filterBar = (filterBtns || editing) ? `
+    const filterBar = editing ? `
       <div class="filters card">
         ${filterBtns || '<span class="muted">Nenhum filtro escolhido. Clique em "Escolher filtros".</span>'}
       </div>` : '';
 
-    el.innerHTML = `${toolbar}${tabs}${selBar}${filterBar}
+    el.innerHTML = `${editing ? toolbar : ''}${tabs}${selBar}${filterBar}
       <div class="dash-canvas ${editing ? 'editing' : ''}">
         ${editing ? '<div class="grid-bg"></div><div class="drop-ghost" hidden></div>' : ''}
         ${cfg.widgets.map(w => widgetHtml(w)).join('')}
@@ -867,7 +877,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       e.stopPropagation(); setFilters({ ...cfg.filters, [b.dataset.unsel]: [] });
     }));
     el.querySelectorAll('.sel-chip').forEach(ch => ch.addEventListener('click', () => openListbox(ch.dataset.field, ch)));
-    el.querySelectorAll('.filter-dd').forEach(b => b.addEventListener('click', () => openListbox(b.dataset.field, b)));
+    el.querySelectorAll('.filter-dd, .filter-pill').forEach(b => b.addEventListener('click', () => openListbox(b.dataset.field, b)));
     act('add', () => editWidget(null));
     act('filters', chooseFilters);
     act('masters', manageMasters);

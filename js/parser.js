@@ -10,14 +10,14 @@
 const DATE_HINT = /(^|_)(data|dt|emis|emissao|venc|vencto|vencimento|dtdigit|entrega)|data|^dt/i;
 // nomes de campos que são códigos (nunca somados): Protheus, fiscais (NF-e, CFOP, CST…) e chaves do Qlik (%Chave)
 const CODE_WORDS = new Set(['cod', 'codigo', 'id', 'cnpj', 'cpf', 'cep', 'filial', 'fil', 'nota', 'doc', 'documento', 'nf', 'nfe', 'serie',
-  'pedido', 'num', 'numero', 'loja', 'tel', 'fone', 'chave', 'cfop', 'ncm', 'cst', 'csosn', 'sit', 'situacao', 'tes', 'cest', 'ean', 'gtin', 'sku', 'lote', 'item', 'conta', 'cc']);
-const isCodeName = name => {
+  'pedido', 'num', 'numero', 'nro', 'nr', 'no', 'docto', 'dcto', 'titulo', 'parcela', 'prefixo', 'matricula', 'registro', 'protocolo', 'loja', 'tel', 'fone', 'chave', 'cfop', 'ncm', 'cst', 'csosn', 'sit', 'situacao', 'tes', 'cest', 'ean', 'gtin', 'sku', 'lote', 'item', 'conta', 'cc']);
+export const isCodeName = name => {
   if (/^\s*%/.test(name)) return true;
   const words = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   return words.some(w => CODE_WORDS.has(w));
 };
 
-import { parseQVD } from './qvd.js?v=18';
+import { parseQVD } from './qvd.js?v=19';
 
 // ---------- leitura do arquivo ----------
 export async function readFile(file, { maxRows = Infinity } = {}) {
