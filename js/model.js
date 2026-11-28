@@ -8,7 +8,7 @@
 //  - Um gráfico pode usar a dimensão de uma tabela e a medida de
 //    outra: o valor da dimensão é encontrado seguindo as ligações.
 // =============================================================
-import { ColTable } from './coltable.js?v=17';
+import { ColTable } from './coltable.js?v=18';
 
 export const keyOf = v => (v === null || v === undefined) ? '' : String(v);
 
@@ -56,7 +56,8 @@ export function buildModel(ds, data) {
   const tables = [
     { id: 'main', name: ds.mainName || ds.name || 'Principal', columns: ds.columns || [] },
     ...(ds.tables || []).map(t => ({ id: t.id, name: t.name, columns: t.columns || [] }))
-  ].map(t => { const ct = asTable(dataMap[t.id], t.columns); return { ...t, t: ct, n: ct.n }; });
+  ].map(t => { const ct = asTable(dataMap[t.id], t.columns); return { ...t, t: ct, n: ct.n }; })
+   .filter(t => t.columns.length);   // app pode não ter tabela principal (app vazio + tabelas adicionadas)
   const byId = Object.fromEntries(tables.map(t => [t.id, t]));
 
   const fieldMap = new Map();
@@ -173,5 +174,7 @@ export function buildModel(ds, data) {
   }
   const cardinality = field => tablesOf(field).reduce((m, id) => Math.max(m, byId[id].t.cardinality(field)), 0);
 
-  return { tables, byId, fields, keys, tablesOf, has, select, resolver, pathTo, measureTable, distinctValues, cardinality, multi: tables.length > 1 };
+  // primeira tabela do app: usada na contagem de linhas, exportação e painel automático
+  const primary = tables[0] || { id: 'main', name: ds.name || 'App', columns: [], t: ColTable.fromRows([], []), n: 0 };
+  return { tables, byId, primary, empty: !tables.length, fields, keys, tablesOf, has, select, resolver, pathTo, measureTable, distinctValues, cardinality, multi: tables.length > 1 };
 }

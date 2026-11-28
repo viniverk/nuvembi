@@ -15,7 +15,7 @@
 //  O modo demo (sem Firebase) simula tudo isso no IndexedDB do navegador.
 // =============================================================
 
-import { ColTable, pack, unpack } from './coltable.js?v=17';
+import { ColTable, pack, unpack } from './coltable.js?v=18';
 
 const FB = '10.12.2';
 const BIN = 900_000;   // bytes por documento (limite do Firestore: 1 MB)
@@ -196,6 +196,21 @@ async function createFirebaseStore(config) {
     async listDatasets() {
       const snap = await F.getDocs(F.query(dsCol(), F.orderBy('createdAt', 'desc')));
       return snap.docs.map(x => ({ id: x.id, ...x.data() }));
+    },
+    // app vazio: as tabelas entram depois pelo Gerenciador de dados
+    async createApp(name) {
+      const ref = F.doc(dsCol());
+      await F.setDoc(ref, { name, source: 'app', columns: [], rowCount: 0, tables: [], createdAt: now(), createdBy: me.email });
+      return ref.id;
+    },
+    async renameTable(dsId, tid, name) {
+      if (tid === 'main') { await F.updateDoc(dsDoc(dsId), { mainName: name }); return; }
+      const meta = (await F.getDoc(dsDoc(dsId))).data();
+      await F.updateDoc(dsDoc(dsId), { tables: (meta.tables || []).map(t => t.id === tid ? { ...t, name } : t) });
+    },
+    async clearMain(dsId) {   // remove os dados da tabela principal (o app continua com as outras tabelas)
+      await F.updateDoc(dsDoc(dsId), { columns: [], rowCount: 0, gen: null, updatedAt: now(), updatedBy: me.email });
+      await deleteChunks(org.id, dsId, x => tableOf(x) !== 'main');
     },
     async saveDataset(meta, rows, onProgress) {
       const ref = F.doc(dsCol());
@@ -412,6 +427,28 @@ function createLocalStore() {
     async listDatasets() {
       const list = (await get('datasets:' + org.id)) || [];
       return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    async createApp(name) {
+      await needEdit();
+      const id = 'ds_' + Date.now().toString(36);
+      const list = (await get('datasets:' + org.id)) || [];
+      list.push({ id, name, source: 'app', columns: [], rowCount: 0, tables: [], createdAt: now(), createdBy: me.email });
+      await set('datasets:' + org.id, list);
+      return id;
+    },
+    async renameTable(dsId, tid, name) {
+      await needEdit();
+      const list = (await get('datasets:' + org.id)) || [];
+      const ds = list.find(x => x.id === dsId);
+      if (tid === 'main') ds.mainName = name; else ds.tables = (ds.tables || []).map(t => t.id === tid ? { ...t, name } : t);
+      await set('datasets:' + org.id, list);
+    },
+    async clearMain(dsId) {
+      await needEdit();
+      await del(`rows:${org.id}:${dsId}`);
+      const list = (await get('datasets:' + org.id)) || [];
+      Object.assign(list.find(x => x.id === dsId), { columns: [], rowCount: 0, updatedAt: now() });
+      await set('datasets:' + org.id, list);
     },
     async saveDataset(meta, table, onProgress) {
       await needEdit();

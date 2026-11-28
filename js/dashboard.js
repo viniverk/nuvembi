@@ -6,9 +6,9 @@
 //    para redimensionar
 // =============================================================
 
-import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=17';
-import { buildModel } from './model.js?v=17';
-import { ColTable } from './coltable.js?v=17';
+import { compile, formatValue, FORMATS, FUNCTIONS_HELP } from './formula.js?v=18';
+import { buildModel } from './model.js?v=18';
+import { ColTable } from './coltable.js?v=18';
 
 const PALETTE = ['#2563eb', '#0d9488', '#f59e0b', '#db2777', '#7c3aed', '#16a34a', '#ea580c', '#0891b2', '#64748b'];
 const AGG = { sum: 'Soma', avg: 'Média', max: 'Máximo', min: 'Mínimo', count: 'Contagem' };
@@ -347,8 +347,9 @@ function groupData(T, idx, w, dimCol, valuesOf) {
 // ---------------- montagem do painel ----------------
 export function mountDashboard(el, ds, data, savedCfg, onSave) {
   const model = buildModel(ds, data);
-  const mainT = model.byId.main.t;
-  let saved = normalizeConfig(savedCfg, ds, mainT);
+  const mainT = model.primary.t;
+  const PID = model.primary.id;
+  let saved = normalizeConfig(savedCfg, { ...ds, columns: model.primary.columns }, mainT);
   let cfg = clone(saved);
   let editing = false;
 
@@ -453,7 +454,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     charts.forEach(c => c.destroy());
     charts.clear();
     const state = model.select(cfg.filters, cfg.dateCol);
-    const rows = state.main;
+    const rows = state[PID] || new Uint32Array(0);
 
     // ----- barra superior -----
     const toolbar = editing ? `
@@ -467,7 +468,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         <button class="btn ghost" data-act="masters">ƒ Itens mestres</button>
         <button class="btn ghost" data-act="add">+ Adicionar gráfico</button>
         <button class="btn ghost" data-act="cancel">Cancelar</button>
-        <button class="btn" data-act="save">Salvar painel</button>
+        <button class="btn" data-act="save">Salvar</button>
       </div>` : `
       <div class="dash-toolbar">
         <div class="spacer"></div>
@@ -634,7 +635,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     }
 
     if (w.type === 'datatable') {
-      const t = model.byId[w.table] || model.byId.main;
+      const t = model.byId[w.table] || model.primary;
       const tRows = ctx.state[t.id];
       const gs = t.columns.map(c => t.t.getter(c.name));
       body.innerHTML = `<div class="table-wrap fill"><table>
@@ -649,7 +650,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
     const mt = model.measureTable(used, w.type === 'kpi' ? null : w.dim);
     const gone = used.filter(f => !model.tablesOf(f).length);
     if (gone.length) {
-      body.innerHTML = `<div class="muted center small">O campo ${esc(gone.join(', '))} não existe mais neste painel (a tabela pode ter sido removida). Edite o gráfico e escolha outra medida.</div>`;
+      body.innerHTML = `<div class="muted center small">O campo ${esc(gone.join(', '))} não existe mais neste app (a tabela pode ter sido removida). Edite o gráfico e escolha outra medida.</div>`;
       return;
     }
     if (!mt) {
@@ -842,7 +843,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       markDirty(); draw();
     }));
     act('cancel', () => {
-      if (dirty && !confirm('Descartar as alterações do painel?')) return;
+      if (dirty && !confirm('Descartar as alterações?')) return;
       resetFromSaved(); editing = false; draw();
     });
     act('save', async e => {
@@ -853,7 +854,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         saved = clone(out); editing = false; dirty = false; resetUndo(); draw();
       } catch { btn.disabled = false; }
     });
-    act('export', () => exportCSV(ds.name, mainT, model.select(cfg.filters, cfg.dateCol).main));
+    act('export', () => exportCSV(ds.name, mainT, model.select(cfg.filters, cfg.dateCol)[PID]));
     el.querySelectorAll('[data-sel]').forEach(b => b.addEventListener('click', () => {
       const a = b.dataset.sel;
       if (a === 'clear') return setFilters({});
@@ -985,7 +986,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
           <optgroup label="Campos">
           ${opt('__count', 'Quantidade de linhas', base.measure === '__count')}
           ${numCols.map(c => opt(c.name, c.name + tableHint(c), c.name === base.measure)).join('')}</optgroup></select></label>
-        ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || 'main'))).join('')}</select></label>` : ''}
+        ${model.multi ? `<label class="field" data-show="table"><span>Tabela</span><select name="wtable">${model.tables.map(t => opt(t.id, t.name, t.id === (base.table || PID))).join('')}</select></label>` : ''}
         <label class="field" data-show="agg"><span>Cálculo</span><select name="agg">${Object.entries(AGG).map(([k, v]) => opt(k, v, k === base.agg)).join('')}</select></label>
         <label class="field" data-show="top"><span>Mostrar</span><select name="top">
           ${[[0, 'Todos os itens'], [5, 'Top 5'], [10, 'Top 10'], [15, 'Top 15'], [20, 'Top 20'], [30, 'Top 30'], [50, 'Top 50']].map(([v, l]) => opt(v, l, +base.top === v)).join('')}</select></label>
@@ -1010,7 +1011,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
         measure: form.measure.value, agg: form.measure.value === '__count' ? 'count' : form.agg.value,
         top: +form.top.value, sort: form.sort.value, color: +(form.color.value || 0), labels: form.labels.value,
         format: form.format.value, period: form.period.value, compare: form.period.value === 'all' ? 'none' : form.compare.value,
-        table: form.wtable ? form.wtable.value : 'main'
+        table: form.wtable ? form.wtable.value : PID
       };
       if (isNew) {
         w.gw = t === 'kpi' ? 6 : t === 'datatable' ? COLS : 12;
@@ -1150,7 +1151,7 @@ export function mountDashboard(el, ds, data, savedCfg, onSave) {
       <label class="check"><input type="checkbox" name="f" value="${esc(value)}" ${checked.has(value) ? 'checked' : ''}>
         <span>${esc(label)}</span>${extra}</label>`;
     const body = `
-      <p class="muted">Marque as colunas que devem aparecer como filtro no topo do painel.</p>
+      <p class="muted">Marque os campos que devem aparecer como filtro no topo do app.</p>
       ${dateCols.length ? `
         <h4>Datas</h4>
         <label class="field"><span>Coluna de data usada nos filtros</span>

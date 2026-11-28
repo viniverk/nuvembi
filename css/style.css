@@ -390,3 +390,22 @@ textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--primary); }
 .sheet-tools button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: .3rem .6rem; font: inherit; font-size: 13px; cursor: pointer; }
 .sheet-tools button:hover:not(:disabled) { background: #eff6ff; border-color: #93c5fd; }
 .sheet-tools button:disabled { opacity: .35; cursor: default; }
+
+/* ---------- app: navegação, gerenciador de dados, novo app ---------- */
+.app-nav { display: flex; gap: .25rem; margin: -.5rem 0 1rem; border-bottom: 1px solid var(--line); }
+.app-nav a { padding: .55rem .9rem; color: var(--muted); font-weight: 600; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+.app-nav a:hover { color: var(--text); }
+.app-nav a.active { color: var(--primary); border-bottom-color: var(--primary); }
+.dm-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.dm-head p { margin: 0; }
+.dm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.dm-table { margin: 0; display: flex; flex-direction: column; gap: .5rem; }
+.dm-table .tags { margin: 0; }
+.dm-title { display: flex; gap: .75rem; align-items: center; }
+.dm-title h3 { margin: 0; }
+.center-actions { justify-content: center; }
+.newapp-options { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.newapp-opt { display: flex; flex-direction: column; gap: .35rem; text-align: left; border: 1.5px solid var(--line); border-radius: 12px; padding: 1rem; background: #fff; cursor: pointer; font: inherit; color: var(--text); }
+.newapp-opt:hover { border-color: var(--primary); background: #eff6ff; }
+.newapp-opt span { color: var(--muted); font-size: 13px; }
+@media (max-width: 600px) { .newapp-options { grid-template-columns: 1fr; } }

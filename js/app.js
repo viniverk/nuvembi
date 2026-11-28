@@ -1,13 +1,13 @@
 // =============================================================
 //  NuvemBI — aplicação principal (telas e navegação)
 // =============================================================
-import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=17';
-import { createStore, ROLES } from './store.js?v=17';
-import { readFile, normalizeRows } from './parser.js?v=17';
-import { mountDashboard, suggestConfig } from './dashboard.js?v=17';
-import { buildModel } from './model.js?v=17';
-import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=17';
-import { ColTable } from './coltable.js?v=17';
+import { firebaseConfig, APP_NAME, MAX_ROWS } from './firebase-config.js?v=18';
+import { createStore, ROLES } from './store.js?v=18';
+import { readFile, normalizeRows } from './parser.js?v=18';
+import { mountDashboard, suggestConfig } from './dashboard.js?v=18';
+import { buildModel } from './model.js?v=18';
+import { summarize, ingest, SUM_GRAINS, COUNT_FIELD } from './summarize.js?v=18';
+import { ColTable } from './coltable.js?v=18';
 
 const $app = document.getElementById('app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -59,7 +59,7 @@ async function bootWorkspace(preferId) {
     store.useOrg(workspace.orgs.find(o => o.id === want) || workspace.orgs[0]);
     if (await store.needsMigration()) {
       const n = await store.migrateLegacy();
-      if (n) toast(`${n} painel(is) trazido(s) para a empresa.`);
+      if (n) toast(`${n} app(s) trazido(s) para a empresa.`);
     }
     return true;
   } catch (e) {
@@ -119,7 +119,8 @@ function route() {
   if (view === 'importar') return showUpload();
   if (view === 'conectores') return showConnectors();
   if (view === 'equipe') return showTeam();
-  if (view === 'painel' && id) return showDashboard(id);
+  if ((view === 'painel' || view === 'app') && id) return showDashboard(id);
+  if (view === 'dados' && id) return showDataManager(id);
   return showHome();
 }
 
@@ -151,10 +152,10 @@ function showLogin() {
   <div class="login">
     <section class="login-hero">
       <div class="brand big"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
-      <h1>Seus dados do ERP e do Excel em painéis prontos, na nuvem.</h1>
+      <h1>Seus dados do ERP, do Qlik e do Excel em apps de BI prontos, na nuvem.</h1>
       <ul class="bullets">
         <li>Importe planilhas Excel e CSV em segundos</li>
-        <li>Painéis gerados automaticamente, com filtros</li>
+        <li>Apps com várias tabelas, pastas e editor de script</li>
         <li>Protheus e SAP: conectores em desenvolvimento</li>
       </ul>
     </section>
@@ -205,8 +206,8 @@ function shell(active, title, content, actions = '') {
         <span class="role-badge ${role()}">${esc(ROLES[role()])}</span>
       </div>
       <nav>
-        ${item('', '▦ Meus painéis', 'home')}
-        ${canEdit() ? item('importar', '⇪ Importar dados', 'upload') : ''}
+        ${item('', '▦ Meus apps', 'home')}
+        ${canEdit() ? item('importar', '⇪ Importar arquivo', 'upload') : ''}
         ${item('equipe', '👥 Equipe', 'team')}
         ${item('conectores', '⛁ Conectores', 'connectors')}
       </nav>
@@ -231,8 +232,9 @@ function shell(active, title, content, actions = '') {
 
 // ---------------- Home ----------------
 async function showHome() {
-  const view = shell('home', 'Meus painéis', '<div class="loading">Carregando…</div>',
-    canEdit() ? `<a class="btn" href="#/importar">+ Novo painel</a>` : '');
+  const view = shell('home', 'Meus apps', '<div class="loading">Carregando…</div>',
+    canEdit() ? `<button class="btn" id="btn-newapp">+ Novo app</button>` : '');
+  document.getElementById('btn-newapp')?.addEventListener('click', openNewApp);
   let list = [];
   try { list = await store.listDatasets(); }
   catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar seus dados.</div>`; return; }
@@ -243,35 +245,66 @@ async function showHome() {
     view.innerHTML = `${invitesBanner}
       <div class="empty card">
         <div class="empty-icon">▦</div>
-        <h2>${canEdit() ? 'Você ainda não tem painéis' : 'Nenhum painel ainda'}</h2>
-        <p>${canEdit() ? `Importe uma planilha de vendas, estoque ou compras e o ${APP_NAME} monta o painel para você.` : 'Quando alguém da sua empresa criar um painel, ele aparece aqui.'}</p>
-        ${canEdit() ? '<a class="btn" href="#/importar">Importar minha primeira planilha</a>' : ''}
+        <h2>${canEdit() ? 'Você ainda não tem apps' : 'Nenhum app ainda'}</h2>
+        <p>${canEdit() ? `Importe uma planilha de vendas, estoque ou compras e o ${APP_NAME} monta o app para você.` : 'Quando alguém da sua empresa criar um app, ele aparece aqui.'}</p>
+        ${canEdit() ? '<div class="row-actions center-actions"><button class="btn" data-newapp>+ Novo app</button><a class="btn ghost" href="#/importar">Importar uma planilha</a></div>' : ''}
       </div>`;
     bindInviteButtons(view);
+    view.querySelector('[data-newapp]')?.addEventListener('click', openNewApp);
     return;
   }
   view.innerHTML = `${invitesBanner}<div class="grid">${list.map(d => `
     <article class="ds card">
-      <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : d.source === 'qvd' ? 'QVD' : 'XLS'}</span>
+      <div class="ds-head"><span class="ds-icon">${d.source === 'csv' ? 'CSV' : d.source === 'qvd' ? 'QVD' : d.source === 'app' ? 'APP' : 'XLS'}</span>
         <div><h3>${esc(d.name)}</h3><small>${new Date(d.createdAt).toLocaleDateString('pt-BR')}${d.createdBy ? ` · ${esc(d.createdBy)}` : ''}</small></div>
         ${d.shareId ? '<span class="badge ok shared-badge" title="Tem link público ativo">🔗 Link ativo</span>' : ''}</div>
-      <p class="muted">${nf.format(d.rowCount)} linhas · ${d.columns.length} colunas${d.tables?.length ? ` · ${d.tables.length + 1} tabelas` : ''}${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
+      <p class="muted">${nf.format((d.rowCount || 0) + (d.tables || []).reduce((t, x) => t + (x.rowCount || 0), 0))} linhas · ${(d.columns.length ? 1 : 0) + (d.tables || []).length} tabela(s)${d.updatedAt ? ` · atualizado em ${new Date(d.updatedAt).toLocaleDateString('pt-BR')}` : ''}</p>
       <div class="tags">${d.columns.slice(0, 5).map(c => `<span class="tag ${c.type}">${esc(c.name)}</span>`).join('')}${d.columns.length > 5 ? `<span class="tag">+${d.columns.length - 5}</span>` : ''}</div>
       <div class="ds-actions">
-        <a class="btn small" href="#/painel/${encodeURIComponent(d.id)}">Abrir painel</a>
-        ${canEdit() ? `<button class="btn ghost small" data-refresh="${esc(d.id)}">⟳ Atualizar</button>` : ''}
+        <a class="btn small" href="#/painel/${encodeURIComponent(d.id)}">Abrir app</a>
+        ${canEdit() ? `<a class="btn ghost small" href="#/dados/${encodeURIComponent(d.id)}">🗄 Dados</a>` : ''}
         ${canEdit() ? `<button class="btn ghost small danger" data-del="${esc(d.id)}" data-name="${esc(d.name)}">Excluir</button>` : ''}
       </div>
     </article>`).join('')}</div>`;
 
   view.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`Excluir o painel "${b.dataset.name}" e todos os seus dados? Isso não pode ser desfeito.`)) return;
+    if (!confirm(`Excluir o app "${b.dataset.name}" e todos os seus dados? Isso não pode ser desfeito.`)) return;
     b.disabled = true;
-    try { await store.deleteDataset(b.dataset.del); rowsCache.delete(b.dataset.del); toast('Painel excluído.'); showHome(); }
+    try { await store.deleteDataset(b.dataset.del); rowsCache.delete(b.dataset.del); toast('App excluído.'); showHome(); }
     catch (e) { console.error(e); toast('Erro ao excluir.', 'err'); b.disabled = false; }
   }));
   bindInviteButtons(view);
   view.querySelectorAll('[data-refresh]').forEach(b => b.addEventListener('click', () => openRefresh(list.find(d => d.id === b.dataset.refresh))));
+}
+
+// ---------------- Novo app ----------------
+function openNewApp() {
+  const back = document.createElement('div');
+  back.className = 'modal-back';
+  back.innerHTML = `
+    <form class="modal card">
+      <header><h2>Novo app</h2><button type="button" class="x" data-close>×</button></header>
+      <div class="modal-body">
+        <label class="field"><span>Nome do app</span><input name="name" required maxlength="60" placeholder="Ex.: Compras 2026"></label>
+        <div class="newapp-options">
+          <button type="submit" class="newapp-opt"><strong>🗄 App vazio</strong><span>Crie o app e adicione várias tabelas (Excel, CSV, QVD) no Gerenciador de dados.</span></button>
+          <a class="newapp-opt" href="#/importar" data-close><strong>⇪ A partir de um arquivo</strong><span>Escolha uma planilha ou QVD e o app já sai com um painel pronto.</span></a>
+        </div>
+      </div>
+    </form>`;
+  document.body.append(back);
+  const close = () => back.remove();
+  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
+  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+  const form = back.querySelector('form');
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = form.name.value.trim();
+    if (!name) return;
+    try { const id = await store.createApp(name); close(); toast('App criado.'); location.hash = `#/dados/${encodeURIComponent(id)}`; }
+    catch (err) { console.error(err); toast('Não foi possível criar o app.', 'err'); }
+  });
+  setTimeout(() => form.name.focus(), 30);
 }
 
 // ---------------- Janela: escolher colunas da importação ----------------
@@ -285,7 +318,7 @@ function chooseColumns(sheet, onApply) {
     <div class="modal card modal-wide">
       <header><h2>Escolher colunas</h2><button class="x" data-close>×</button></header>
       <div class="modal-body">
-        <p class="muted">O arquivo tem <strong>${sheet.columns.length} colunas</strong>. Desmarque as que não precisa no painel — ele fica menor e abre mais rápido.</p>
+        <p class="muted">O arquivo tem <strong>${sheet.columns.length} colunas</strong>. Desmarque as que não precisa no app — ele fica menor e abre mais rápido.</p>
         <div class="cols-tools">
           <input id="cols-search" placeholder="Pesquisar coluna…">
           <button type="button" class="btn ghost small" data-c="all">Selecionar todas</button>
@@ -342,7 +375,7 @@ function openRefresh(ds) {
           <strong>Escolher planilha</strong><span class="muted">Excel, CSV ou QVD</span></label>
         <div id="rsummary"></div>
       </div>
-      <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="rgo" disabled>Atualizar painel</button></footer>
+      <footer><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="rgo" disabled>Atualizar dados</button></footer>
     </div>`;
   document.body.append(back);
   const close = () => back.remove();
@@ -369,13 +402,13 @@ function openRefresh(ds) {
     summary.innerHTML = `
       ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="rsheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
       <div class="refresh-summary">
-        <div><strong>${nf.format(sheet.total || sheet.data.length)}</strong> linhas no arquivo → ${ds.summary ? 'serão resumidas como na importação' : `o painel fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas`}
+        <div><strong>${nf.format(sheet.total || sheet.data.length)}</strong> linhas no arquivo → ${ds.summary ? 'serão resumidas como na importação' : `a tabela fica com <strong>${nf.format(Math.min(total, MAX_ROWS))}</strong> linhas`}
           ${append ? `<span class="muted">(${nf.format(ds.rowCount)} atuais + ${nf.format(fileRows)} novas)</span>` : ''}</div>
-        <div class="ok-text">✓ ${same.length} coluna(s) iguais às do painel</div>
+        <div class="ok-text">✓ ${same.length} coluna(s) iguais às da tabela</div>
         ${extra.length ? (ds.summary ? `<div class="muted">Ignoradas no resumo: ${extra.map(c => esc(c.name)).join(', ')}</div>` : `<div>+ ${extra.length} coluna(s) nova(s): ${extra.map(c => esc(c.name)).join(', ')}</div>`) : ''}
         ${missing.length ? `<div class="warn-text">⚠ Não encontradas na planilha: ${missing.map(c => esc(c.name)).join(', ')}.${append ? ' As linhas novas ficam sem esses valores.' : ' Gráficos e filtros que usam essas colunas vão ficar vazios.'}</div>` : ''}
-        ${!same.length ? '<div class="error">Nenhuma coluna bate com o painel — parece ser outra planilha.</div>' : ''}
-        ${ds.summary ? `<div class="ok-text">Σ Este painel é resumido: o arquivo novo será resumido do mesmo jeito (${ds.summary.keep.length} campos${Object.values(ds.summary.grains || {}).includes('month') ? ', datas por mês' : ''}${ds.summary.from ? `, a partir de ${new Date(ds.summary.from + 'T12:00').toLocaleDateString('pt-BR')}` : ''}).</div>`
+        ${!same.length ? '<div class="error">Nenhuma coluna bate com a tabela — parece ser outra planilha.</div>' : ''}
+        ${ds.summary ? `<div class="ok-text">Σ Esta tabela é resumida: o arquivo novo será resumido do mesmo jeito (${ds.summary.keep.length} campos${Object.values(ds.summary.grains || {}).includes('month') ? ', datas por mês' : ''}${ds.summary.from ? `, a partir de ${new Date(ds.summary.from + 'T12:00').toLocaleDateString('pt-BR')}` : ''}).</div>`
           : total > MAX_ROWS ? `<div class="warn-text">⚠ Passa do limite de ${nf.format(MAX_ROWS)} linhas; o excedente fica de fora.</div>` : ''}
         ${append ? '<div class="muted small">Dica: o sistema não remove linhas repetidas. Se a planilha já tem os meses anteriores, use "Substituir".</div>' : ''}
       </div>`;
@@ -422,10 +455,10 @@ function openRefresh(ds) {
       rowsCache.delete(ds.id);
       close();
       toast(`Dados atualizados: ${nf.format(table.n)} linhas.`);
-      if (location.hash === `#/painel/${encodeURIComponent(ds.id)}`) showDashboard(ds.id); else location.hash = `#/painel/${encodeURIComponent(ds.id)}`;
+      afterDataChange(ds.id);
     } catch (err) {
       console.error(err); toast('Não foi possível atualizar os dados.', 'err');
-      go.disabled = false; go.textContent = 'Atualizar painel';
+      go.disabled = false; go.textContent = 'Atualizar dados';
     }
   });
 }
@@ -474,42 +507,6 @@ function modelSvg(model) {
   return `<svg class="model-svg" viewBox="0 0 ${width} ${height}" style="max-width:${width}px">${lines}${boxSvg}</svg>`;
 }
 
-function openModel(ds, data) {
-  const model = buildModel(ds, data);
-  const back = document.createElement('div');
-  back.className = 'modal-back';
-  const linksOf = t => model.keys.filter(k => t.columns.some(c => c.name === k));
-  back.innerHTML = `
-    <div class="modal card modal-wide">
-      <header><h2>Modelo de dados</h2><button class="x" data-close>×</button></header>
-      <div class="modal-body">
-        <p class="muted">As tabelas se ligam pelos <strong>campos com o mesmo nome</strong> (🔑), como no Qlik. Selecionar um valor em uma tabela filtra as outras pelas ligações, e um gráfico pode juntar campos de tabelas ligadas.</p>
-        <div class="model-wrap">${modelSvg(model)}</div>
-        <div class="table-list">${model.tables.map(t => `
-          <div class="tl-item">
-            <div><strong>${esc(t.name)}</strong> ${t.id === 'main' ? '<span class="tag">principal</span>' : ''}
-              <small class="muted">${nf.format(t.n)} linhas · ${t.columns.length} campos · ${linksOf(t).length ? 'liga por ' + linksOf(t).map(esc).join(', ') : '<span class="warn-text">sem ligação</span>'}</small></div>
-            ${canEdit() && t.id !== 'main' ? `<div class="row-actions"><button class="btn ghost small" data-tupd="${t.id}">⟳ Atualizar</button><button class="btn ghost small danger" data-tdel="${t.id}">Remover</button></div>` : ''}
-          </div>`).join('')}</div>
-        ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar tabela</button>' : ''}
-      </div>
-    </div>`;
-  document.body.append(back);
-  const close = () => back.remove();
-  back.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', close));
-  back.addEventListener('mousedown', e => { if (e.target === back) close(); });
-  back.querySelector('#btn-addtable')?.addEventListener('click', () => { close(); openAddTable(ds, data); });
-  back.querySelectorAll('[data-tupd]').forEach(b => b.addEventListener('click', () => { close(); openAddTable(ds, data, (ds.tables || []).find(t => t.id === b.dataset.tupd)); }));
-  back.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', async () => {
-    const t = ds.tables.find(x => x.id === b.dataset.tdel);
-    if (!confirm(`Remover a tabela "${t.name}" deste painel? Gráficos que usam campos dela vão ficar vazios.`)) return;
-    try {
-      ds.tables = await store.removeTable(ds.id, t.id);
-      rowsCache.delete(ds.id); close(); toast('Tabela removida.'); showDashboard(ds.id);
-    } catch (err) { console.error(err); toast('Não foi possível remover a tabela.', 'err'); }
-  }));
-}
-
 // adicionar uma tabela ao painel (ou atualizar uma tabela extra existente)
 function openAddTable(ds, data, existing = null) {
   const others = buildModel({ ...ds, tables: (ds.tables || []).filter(t => !existing || t.id !== existing.id) }, data);
@@ -518,7 +515,7 @@ function openAddTable(ds, data, existing = null) {
   back.className = 'modal-back';
   back.innerHTML = `
     <div class="modal card modal-wide">
-      <header><h2>${existing ? `Atualizar tabela "${esc(existing.name)}"` : 'Adicionar tabela ao painel'}</h2><button class="x" data-close>×</button></header>
+      <header><h2>${existing ? `Atualizar tabela "${esc(existing.name)}"` : 'Adicionar dados ao app'}</h2><button class="x" data-close>×</button></header>
       <div class="modal-body">
         <p class="muted">${existing ? 'Envie a planilha nova desta tabela. Os nomes dos campos são mantidos quando batem.' : 'Ex.: Metas por vendedor, cadastro de Vendedores ou de Produtos.'} Campos com o <strong>mesmo nome</strong> de um campo de outra tabela viram ligação 🔗 — renomeie aqui para ligar ou desligar.</p>
         <label class="drop small-drop"><input type="file" id="tfile" accept=".xlsx,.xls,.xlsm,.csv,.txt,.qvd" hidden><strong>Escolher planilha</strong><span class="muted">Excel, CSV ou QVD</span></label>
@@ -578,7 +575,7 @@ function openAddTable(ds, data, existing = null) {
         }).join('')}</tbody>
       </table></div>
       <div class="refresh-summary">
-        ${st.links.length ? `<div class="ok-text">🔗 Liga ao modelo por: ${st.links.map(x => esc(x.f.name)).join(', ')}</div>` : '<div class="warn-text">⚠ Nenhum campo com o mesmo nome de outra tabela: esta tabela vai ficar solta (as seleções não a filtram). Renomeie a coluna-chave para o nome usado no painel, por exemplo "Vendedor".</div>'}
+        ${st.links.length ? `<div class="ok-text">🔗 Liga ao modelo por: ${st.links.map(x => esc(x.f.name)).join(', ')}</div>` : '<div class="warn-text">⚠ Nenhum campo com o mesmo nome de outra tabela: esta tabela vai ficar solta (as seleções não a filtram). Renomeie a coluna-chave para o nome usado no app, por exemplo "Vendedor".</div>'}
         ${st.multi.length ? `<div class="warn-text">⚠ Liga com ${esc(st.multi.join(', '))} por mais de um campo. Isso pode gerar resultados inesperados (no Qlik vira "chave sintética"). Prefira um campo-chave só: renomeie os outros.</div>` : ''}
         ${st.dup.length ? `<div class="error">Nomes repetidos: ${esc([...new Set(st.dup)].join(', '))}</div>` : ''}
         ${st.empty ? '<div class="error">Todo campo precisa de um nome.</div>' : ''}
@@ -610,8 +607,8 @@ function openAddTable(ds, data, existing = null) {
                            : await store.addTable(ds.id, { name, columns }, rows, prog);
       rowsCache.delete(ds.id);
       close();
-      toast(existing ? `Tabela "${name}" atualizada.` : `Tabela "${name}" adicionada ao painel.`);
-      showDashboard(ds.id);
+      toast(existing ? `Tabela "${name}" atualizada.` : `Tabela "${name}" adicionada ao app.`);
+      afterDataChange(ds.id);
     } catch (err) {
       console.error(err); toast('Não foi possível salvar a tabela.', 'err');
       go.disabled = false; go.textContent = existing ? 'Atualizar tabela' : 'Adicionar tabela';
@@ -709,17 +706,17 @@ async function handleFile(file) {
     preview.innerHTML = `
       <div class="card">
         <div class="preview-head">
-          <label class="field grow"><span>Nome do painel</span><input id="ds-name" value="${esc(sheets.length > 1 ? `${baseName} - ${sheet.name}` : baseName)}"></label>
+          <label class="field grow"><span>Nome do app</span><input id="ds-name" value="${esc(sheets.length > 1 ? `${baseName} - ${sheet.name}` : baseName)}"></label>
           ${sheets.length > 1 ? `<label class="field"><span>Aba</span><select id="sheet">${sheets.map((s, i) => `<option value="${i}" ${s === sheet ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>` : ''}
         </div>
         <p class="muted">${nf.format(sheet.total || sheet.data.length)} linhas · ${sheet.columns.length} colunas${sheet.total ? ' · arquivo QVD do Qlik' : ''}. Confira os tipos detectados — números são somados, datas viram linha do tempo e textos viram filtros.</p>
-        ${tooMany && !sumOn ? `<p class="error">Este plano aceita até ${nf.format(MAX_ROWS)} linhas por painel e o arquivo tem ${nf.format(total)}. Resuma os dados abaixo para usar o arquivo inteiro — sem resumir, só as primeiras ${nf.format(MAX_ROWS)} linhas serão importadas.</p>` : ''}
+        ${tooMany && !sumOn ? `<p class="error">Este plano aceita até ${nf.format(MAX_ROWS)} linhas por tabela e o arquivo tem ${nf.format(total)}. Resuma os dados abaixo para usar o arquivo inteiro — sem resumir, só as primeiras ${nf.format(MAX_ROWS)} linhas serão importadas.</p>` : ''}
         <div class="cols-bar">
           <strong class="${nOn ? '' : 'error'}">${nOn} de ${nAll} colunas selecionadas</strong>
           <button type="button" class="btn ghost small" data-cols="all">Selecionar todas</button>
           <button type="button" class="btn ghost small" data-cols="none">Limpar seleção</button>
           <button type="button" class="btn small" data-cols="popup">☰ Escolher colunas…</button>
-          <span class="muted small">Desmarque as colunas que não quer importar — o painel fica menor e mais rápido.</span>
+          <span class="muted small">Desmarque as colunas que não quer importar — o app fica menor e mais rápido.</span>
         </div>
         <div class="table-wrap"><table class="preview-table">
           <thead>
@@ -729,7 +726,7 @@ async function handleFile(file) {
           <tbody>${sheet.data.slice(0, 8).map(r => `<tr>${sheet.columns.map(c => `<td class="${c.keep === false ? 'col-off' : ''}">${esc(r[c.index] instanceof Date ? r[c.index].toLocaleDateString('pt-BR') : r[c.index])}</td>`).join('')}</tr>`).join('')}</tbody>
         </table></div>
         ${sumBox}
-        <div class="row-end"><span class="muted" id="progress"></span><button class="btn" id="btn-save">Criar painel</button></div>
+        <div class="row-end"><span class="muted" id="progress"></span><button class="btn" id="btn-save">Criar app</button></div>
       </div>`;
 
     const out = preview.querySelector('#sum-out');
@@ -793,7 +790,7 @@ async function handleFile(file) {
         prog.textContent = 'Compactando…';
         const id = await store.saveDataset(meta, table, p => (prog.textContent = `Enviando… ${Math.round(p * 100)}%`));
         rowsCache.set(id, { main: table });
-        toast('Painel criado!');
+        toast('App criado!');
         location.hash = `#/painel/${encodeURIComponent(id)}`;
       } catch (err) {
         console.error(err);
@@ -807,26 +804,121 @@ async function handleFile(file) {
 }
 
 // ---------------- Painel ----------------
-async function showDashboard(id) {
-  const view = shell('home', 'Carregando painel…', '<div class="loading">Carregando dados…</div>',
-    `<a class="btn ghost" href="#/">← Voltar</a><button class="btn ghost" id="btn-model">🗂 Modelo de dados</button>${canEdit() ? '<button class="btn ghost" id="btn-refresh">⟳ Atualizar dados</button><button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
-  let ds, rows;
-  try {
-    const list = await store.listDatasets();
-    ds = list.find(d => d.id === id);
-    if (!ds) { view.innerHTML = `<div class="card error">Painel não encontrado.</div>`; return; }
-    rows = rowsCache.get(id) || await store.loadAll(id);   // { main: [...], <tabela>: [...] }
-    rowsCache.set(id, rows);
-  } catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o painel.</div>`; return; }
+function afterDataChange(id) {
+  rowsCache.delete(id);
+  const h = location.hash;
+  if (/^#\/(painel|app|dados|script)\//.test(h)) route(); else location.hash = `#/dados/${encodeURIComponent(id)}`;
+}
 
+async function loadApp(id) {
+  const list = await store.listDatasets();
+  const ds = list.find(d => d.id === id);
+  if (!ds) return null;
+  const data = rowsCache.get(id) || await store.loadAll(id);   // { main: ColTable, <tabela>: ColTable }
+  rowsCache.set(id, data);
+  return { ds, data };
+}
+
+// navegação do app, como no Qlik: Analisar (pastas) · Preparar (gerenciador de dados, editor de script)
+function appNav(view, ds, active) {
+  const id = encodeURIComponent(ds.id);
+  const link = (key, href, label) => `<a href="${href}" class="${active === key ? 'active' : ''}">${label}</a>`;
+  view.insertAdjacentHTML('beforebegin', `
+    <nav class="app-nav">
+      ${link('analisar', `#/painel/${id}`, '📊 Analisar')}
+      ${link('dados', `#/dados/${id}`, '🗄 Gerenciador de dados')}
+    </nav>`);
+}
+
+async function showDashboard(id) {
+  const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
+    `<a class="btn ghost" href="#/">← Meus apps</a>${canEdit() ? '<button class="btn ghost" id="btn-share">🔗 Compartilhar</button>' : ''}`);
+  let app;
+  try { app = await loadApp(id); }
+  catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }
+  if (!app) { view.innerHTML = `<div class="card error">App não encontrado.</div>`; return; }
+  const { ds, data } = app;
   document.querySelector('.topbar h1').textContent = ds.name;
+  appNav(view, ds, 'analisar');
   document.getElementById('btn-share')?.addEventListener('click', () => openShare(ds));
-  document.getElementById('btn-refresh')?.addEventListener('click', () => openRefresh(ds));
-  document.getElementById('btn-model').addEventListener('click', () => openModel(ds, rows));
-  mountDashboard(view, ds, rows, ds.dashboard, canEdit() ? async cfg => {
-    try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; toast('Painel salvo.'); }
-    catch (e) { console.error(e); toast('Erro ao salvar o painel.', 'err'); throw e; }
+  if (buildModel(ds, data).empty) {
+    view.innerHTML = `
+      <div class="empty card">
+        <div class="empty-icon">🗄</div>
+        <h2>Este app ainda não tem dados</h2>
+        <p>Adicione planilhas Excel, CSV ou arquivos QVD no Gerenciador de dados. Tabelas com campos de mesmo nome se ligam sozinhas.</p>
+        ${canEdit() ? `<a class="btn" href="#/dados/${encodeURIComponent(ds.id)}">Ir para o Gerenciador de dados</a>` : ''}
+      </div>`;
+    return;
+  }
+  mountDashboard(view, ds, data, ds.dashboard, canEdit() ? async cfg => {
+    try { await store.updateDashboard(id, cfg); ds.dashboard = cfg; toast('App salvo.'); }
+    catch (e) { console.error(e); toast('Erro ao salvar o app.', 'err'); throw e; }
   } : null);
+}
+
+// ---------------- Gerenciador de dados (tabelas do app + modelo) ----------------
+async function showDataManager(id) {
+  const view = shell('home', 'Carregando app…', '<div class="loading">Carregando dados…</div>',
+    `<a class="btn ghost" href="#/">← Meus apps</a>`);
+  let app;
+  try { app = await loadApp(id); }
+  catch (e) { console.error(e); view.innerHTML = `<div class="card error">Erro ao carregar o app.</div>`; return; }
+  if (!app) { view.innerHTML = `<div class="card error">App não encontrado.</div>`; return; }
+  const { ds, data } = app;
+  document.querySelector('.topbar h1').textContent = ds.name;
+  appNav(view, ds, 'dados');
+  const model = buildModel(ds, data);
+  const linksOf = t => model.keys.filter(k => t.columns.some(c => c.name === k));
+  const fmtSize = b => !b ? '' : b > 1e6 ? ` · ${(b / 1e6).toFixed(1).replace('.', ',')} MB` : ` · ${Math.max(1, Math.round(b / 1e3))} KB`;
+  const metaOf = t => t.id === 'main' ? ds : (ds.tables || []).find(x => x.id === t.id) || {};
+
+  view.innerHTML = `
+    <div class="dm-head">
+      <p class="muted">As tabelas do app se ligam pelos <strong>campos com o mesmo nome</strong> (🔑), como no Qlik. Adicione quantas quiser: Excel, CSV ou QVD.</p>
+      ${canEdit() ? '<button class="btn" id="btn-addtable">+ Adicionar dados</button>' : ''}
+    </div>
+    ${model.empty ? `<div class="empty card"><div class="empty-icon">🗄</div><h2>Nenhuma tabela ainda</h2><p>Clique em <strong>+ Adicionar dados</strong> e escolha uma planilha ou QVD.</p></div>` : `
+    <div class="dm-grid">${model.tables.map(t => {
+      const m = metaOf(t);
+      return `
+      <article class="card dm-table">
+        <div class="dm-title"><span class="ds-icon">${t.id === 'main' ? (ds.source === 'qvd' ? 'QVD' : ds.source === 'csv' ? 'CSV' : 'XLS') : 'TAB'}</span>
+          <div><h3>${esc(t.name)}</h3><small class="muted">${nf.format(t.n)} linhas · ${t.columns.length} campos${fmtSize(m.bytes)}${m.summary ? ' · resumida' : ''}</small></div></div>
+        <div class="tags">${t.columns.slice(0, 8).map(c => `<span class="tag ${c.type}">${model.keys.includes(c.name) ? '🔑 ' : ''}${esc(c.name)}</span>`).join('')}${t.columns.length > 8 ? `<span class="tag">+${t.columns.length - 8}</span>` : ''}</div>
+        <small class="muted">${linksOf(t).length ? 'Liga por ' + linksOf(t).map(esc).join(', ') : '<span class="warn-text">Sem ligação com outras tabelas</span>'}</small>
+        ${canEdit() ? `<div class="row-actions">
+          <button class="btn ghost small" data-tupd="${t.id}">⟳ Atualizar</button>
+          <button class="btn ghost small" data-tren="${t.id}">✎ Renomear</button>
+          <button class="btn ghost small danger" data-tdel="${t.id}">🗑 Remover</button>
+        </div>` : ''}
+      </article>`;
+    }).join('')}</div>
+    <div class="card">
+      <h3>Visualizador do modelo</h3>
+      <div class="model-wrap">${modelSvg(model)}</div>
+    </div>`}`;
+
+  view.querySelector('#btn-addtable')?.addEventListener('click', () => openAddTable(ds, data));
+  view.querySelectorAll('[data-tupd]').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.tupd === 'main') openRefresh(ds);
+    else openAddTable(ds, data, (ds.tables || []).find(t => t.id === b.dataset.tupd));
+  }));
+  view.querySelectorAll('[data-tren]').forEach(b => b.addEventListener('click', async () => {
+    const t = model.byId[b.dataset.tren];
+    const name = prompt('Novo nome da tabela:', t.name);
+    if (!name || !name.trim() || name.trim() === t.name) return;
+    try { await store.renameTable(ds.id, t.id, name.trim().slice(0, 40)); toast('Tabela renomeada.'); afterDataChange(ds.id); }
+    catch (err) { console.error(err); toast('Não foi possível renomear.', 'err'); }
+  }));
+  view.querySelectorAll('[data-tdel]').forEach(b => b.addEventListener('click', async () => {
+    const t = model.byId[b.dataset.tdel];
+    if (!confirm(`Remover a tabela "${t.name}" do app? Gráficos que usam campos dela vão ficar vazios.`)) return;
+    try {
+      if (t.id === 'main') await store.clearMain(ds.id); else ds.tables = await store.removeTable(ds.id, t.id);
+      toast('Tabela removida.'); afterDataChange(ds.id);
+    } catch (err) { console.error(err); toast('Não foi possível remover a tabela.', 'err'); }
+  }));
 }
 
 // ---------------- Compartilhar por link ----------------
@@ -841,7 +933,7 @@ function openShare(ds) {
         <header><h2>Compartilhar "${esc(ds.name)}"</h2><button class="x" data-close>×</button></header>
         <div class="modal-body">
           ${ds.shareId ? `
-            <p><span class="badge ok">🔗 Link ativo</span> Qualquer pessoa com o link vê o painel e usa os filtros, <strong>sem precisar de conta</strong>. Ninguém consegue editar.</p>
+            <p><span class="badge ok">🔗 Link ativo</span> Qualquer pessoa com o link vê o app e usa os filtros, <strong>sem precisar de conta</strong>. Ninguém consegue editar.</p>
             <div class="copy-row"><input id="share-url" readonly value="${esc(shareUrl(ds.shareId))}"><button class="btn" id="btn-copy">Copiar</button></div>
             <div class="row-actions">
               <a class="btn ghost small" href="${esc(shareUrl(ds.shareId))}" target="_blank" rel="noopener">Abrir em nova aba</a>
@@ -849,7 +941,7 @@ function openShare(ds) {
             </div>
             <p class="muted small">Ao desativar, o link para de funcionar na hora. Um link novo gerado depois será diferente.</p>`
           : `
-            <p>Crie um link para mostrar este painel a alguém de fora da empresa (sócio, cliente, uma TV na recepção). Quem abrir só visualiza e filtra.</p>
+            <p>Crie um link para mostrar este app a alguém de fora da empresa (sócio, cliente, uma TV na recepção). Quem abrir só visualiza e filtra.</p>
             <button class="btn" id="btn-create">Criar link de visualização</button>
             <p class="muted small">Para dar acesso com login e poder de edição, convide a pessoa em <a href="#/equipe" data-close>Equipe</a>.</p>`}
         </div>
@@ -866,7 +958,7 @@ function openShare(ds) {
       toast('Link copiado.');
     });
     back.querySelector('#btn-revoke')?.addEventListener('click', async e => {
-      if (!confirm('Desativar o link? Quem tiver o link não vai mais conseguir abrir o painel.')) return;
+      if (!confirm('Desativar o link? Quem tiver o link não vai mais conseguir abrir o app.')) return;
       e.target.disabled = true;
       try { await store.revokeShare(ds); delete ds.shareId; toast('Link desativado.'); paint(); }
       catch (err) { console.error(err); toast('Não foi possível desativar.', 'err'); e.target.disabled = false; }
@@ -879,13 +971,13 @@ function openShare(ds) {
 
 // painel aberto pelo link público (sem login, só leitura)
 async function showPublic(t) {
-  $app.innerHTML = '<div class="loading">Carregando painel…</div>';
+  $app.innerHTML = '<div class="loading">Carregando app…</div>';
   let data = null;
   try { data = await store.loadShared(t); } catch (e) { console.error(e); }
   if (!data) {
     $app.innerHTML = `<div class="center-page"><div class="card invite-page">
       <div class="brand"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
-      <h2>Link indisponível</h2><p class="muted">Este painel não existe mais ou o link foi desativado por quem compartilhou.</p>
+      <h2>Link indisponível</h2><p class="muted">Este app não existe mais ou o link foi desativado por quem compartilhou.</p>
       <a class="btn" href="${location.pathname}">Conhecer o ${APP_NAME}</a></div></div>`;
     return;
   }
@@ -895,7 +987,7 @@ async function showPublic(t) {
         <div class="brand dark"><img class="logo-img" src="img/icon-nuvembi.png" alt=""> ${APP_NAME}</div>
         <h1>${esc(data.ds.name)}</h1>
         <span class="badge">Somente visualização</span>
-        <a class="btn small" href="${location.pathname}" target="_blank" rel="noopener">Criar meu painel grátis</a>
+        <a class="btn small" href="${location.pathname}" target="_blank" rel="noopener">Criar meu app grátis</a>
       </header>
       <main class="main" id="view"></main>
     </div>`;
@@ -930,8 +1022,8 @@ async function showTeam() {
       <p class="muted small">A pessoa entra no site com <strong>esse mesmo e-mail</strong> (criando a conta, se ainda não tiver) e aceita o convite na tela inicial. Nenhum e-mail é enviado automaticamente — use "Copiar convite" para mandar pelo WhatsApp ou e-mail.</p>
       <div class="roles-help">
         <div><strong>Administrador</strong><span>tudo, inclusive equipe e nome da empresa</span></div>
-        <div><strong>Editor</strong><span>importa planilhas, edita, exclui e compartilha painéis</span></div>
-        <div><strong>Visualizador</strong><span>só vê e filtra os painéis</span></div>
+        <div><strong>Editor</strong><span>importa planilhas, edita, exclui e compartilha apps</span></div>
+        <div><strong>Visualizador</strong><span>só vê e filtra os apps</span></div>
       </div>
     </div>` : ''}
     <div class="card">
@@ -989,7 +1081,7 @@ async function showTeam() {
     catch (err) { console.error(err); toast('Não foi possível mudar o papel.', 'err'); reload(); }
   }));
   view.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`Remover ${b.dataset.email} da empresa? A pessoa perde o acesso aos painéis.`)) return;
+    if (!confirm(`Remover ${b.dataset.email} da empresa? A pessoa perde o acesso aos apps.`)) return;
     try { await store.removeMember(b.dataset.remove); toast('Pessoa removida.'); reload(); }
     catch (err) { console.error(err); toast('Não foi possível remover.', 'err'); }
   }));
@@ -1004,7 +1096,7 @@ async function showTeam() {
     catch { prompt('Copie a mensagem:', msg); }
   }));
   view.querySelector('[data-leave]')?.addEventListener('click', async () => {
-    if (!confirm(`Sair da empresa "${store.org.name}"? Você perde o acesso aos painéis dela.`)) return;
+    if (!confirm(`Sair da empresa "${store.org.name}"? Você perde o acesso aos apps dela.`)) return;
     try {
       await store.leaveOrg(store.org.id);
       toast('Você saiu da empresa.');
@@ -1026,7 +1118,7 @@ function showConnectors() {
       ${card('QVD', 'Arquivos QVD (Qlik)', 'Ativo', 'ok', 'Envie os .qvd gerados pelas suas cargas do Qlik Sense/QlikView. Números, datas e códigos com zero à esquerda vêm com o tipo certo, sem precisar exportar para Excel.')}
       ${card('TOTVS', 'Protheus (SQL Server)', 'Fase 2', 'warn', 'Um agente instalado no servidor da empresa lê as tabelas (SD2, SF2, SB1, SB2…) e envia os dados para a nuvem em horários agendados.')}
       ${card('SAP', 'SAP ECC / S/4HANA', 'Fase 3', 'muted', 'Integração via OData ou extração por agente local, com o mesmo modelo de envio agendado.')}
-      ${card('G', 'Google Planilhas', 'Fase 2', 'warn', 'Conexão direta com uma planilha do Google, atualizando o painel automaticamente.')}
+      ${card('G', 'Google Planilhas', 'Fase 2', 'warn', 'Conexão direta com uma planilha do Google, atualizando o app automaticamente.')}
     </div>
     <div class="card">
       <h3>Enquanto o conector Protheus não chega</h3>
